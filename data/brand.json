@@ -3,9 +3,9 @@
   "short_name": "BROUTE",
   "description": "بروزترین کانفیگ های رایگان",
   "telegram": "https://t.me/xbroute",
-  "github": "https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPOSITORY_NAME",
+  "github": "https://github.com/xbroute/Broute-Collector",
   "logo": "assets/logo.png",
   "primary_color": "#ffdf83",
-  "subscription_url": "https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPOSITORY_NAME/data/sub.txt",
-  "subscription_base64_url": "https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPOSITORY_NAME/data/sub-base64.txt"
+  "subscription_url": "https://xbroute.github.io/Broute-Collector/data/sub.txt",
+  "subscription_base64_url": "https://xbroute.github.io/Broute-Collector/data/sub-base64.txt"
 }
