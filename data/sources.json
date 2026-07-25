@@ -1,0 +1,66 @@
+{
+  "_comment": "جمع‌آوری از مخازن GitHub متوقف شده (enabled=false نگه داشته شده تا در صورت نیاز دوباره فعال شود). فقط منابع تلگرام فعال هستند.",
+
+  "github_sources": [
+    { "name": "barry-far vmess", "url": "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/vmess.txt", "enabled": false },
+    { "name": "barry-far vless", "url": "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/vless.txt", "enabled": false },
+    { "name": "barry-far trojan", "url": "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/trojan.txt", "enabled": false },
+    { "name": "barry-far ss", "url": "https://raw.githubusercontent.com/barry-far/V2ray-config/main/Splitted-By-Protocol/ss.txt", "enabled": false },
+    { "name": "Epodonios Sub1", "url": "https://raw.githubusercontent.com/Epodonios/v2ray-configs/refs/heads/main/Sub1.txt", "enabled": false },
+    { "name": "ebrasha main list", "url": "https://raw.githubusercontent.com/ebrasha/free-v2ray-public-list/refs/heads/main/V2Ray-Config-By-EbraSha.txt", "enabled": false },
+    { "name": "MatinGhanbari super-sub", "url": "https://raw.githubusercontent.com/MatinGhanbari/v2ray-configs/main/subscriptions/v2ray/super-sub.txt", "enabled": false },
+    { "name": "V2RayRoot vless", "url": "https://raw.githubusercontent.com/V2RayRoot/V2RayConfig/refs/heads/main/Config/vless.txt", "enabled": false },
+    { "name": "shabane kamaji merged", "url": "https://raw.githubusercontent.com/shabane/kamaji/master/hub/merged.txt", "enabled": false },
+    { "name": "gfpcom vless", "url": "https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/vless.txt", "enabled": false },
+    { "name": "gfpcom vmess", "url": "https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/vmess.txt", "enabled": false },
+    { "name": "gfpcom trojan", "url": "https://raw.githubusercontent.com/wiki/gfpcom/free-proxy-list/lists/trojan.txt", "enabled": false },
+    { "name": "LalatinaHub Mineral nodes", "url": "https://github.com/LalatinaHub/Mineral/raw/refs/heads/master/result/nodes", "enabled": false },
+    { "name": "youfoundamin V2rayCollector", "url": "https://raw.githubusercontent.com/youfoundamin/V2rayCollector/main/mixed_iran.txt", "enabled": false },
+    { "name": "Argh94 Proxy-List", "url": "https://github.com/Argh94/Proxy-List/raw/refs/heads/main/All_Config.txt", "enabled": false }
+  ],
+
+  "subscription_sources": [],
+
+  "telegram_sources": [
+    { "name": "UnlimitConfig", "channel": "UnlimitConfig", "enabled": true },
+    { "name": "persianvpnhub", "channel": "persianvpnhub", "enabled": true },
+    { "name": "proxy_kafee", "channel": "proxy_kafee", "enabled": true },
+    { "name": "YamYamProxy", "channel": "YamYamProxy", "enabled": true },
+    { "name": "JavidanNet", "channel": "JavidanNet", "enabled": true },
+    { "name": "ConfigFast", "channel": "ConfigFast", "enabled": true },
+    { "name": "Zed_NetMeli", "channel": "Zed_NetMeli", "enabled": true },
+    { "name": "erfanandroid", "channel": "erfanandroid", "enabled": true },
+    { "name": "configshere", "channel": "configshere", "enabled": true },
+    { "name": "cpy_teeL", "channel": "cpy_teeL", "enabled": true },
+    { "name": "MARAMBASHI", "channel": "MARAMBASHI", "enabled": true },
+    { "name": "meliproxyy", "channel": "meliproxyy", "enabled": true },
+    { "name": "SRCVPN", "channel": "SRCVPN", "enabled": true },
+    { "name": "anty_filter", "channel": "anty_filter", "enabled": true },
+    { "name": "DailyV2Proxy", "channel": "DailyV2Proxy", "enabled": true },
+    { "name": "TheFreeConfigs", "channel": "TheFreeConfigs", "enabled": true },
+    { "name": "OpenVpnUser", "channel": "OpenVpnUser", "enabled": true },
+    { "name": "Proxy_Station", "channel": "Proxy_Station", "enabled": true },
+    { "name": "GH_v2rayng", "channel": "GH_v2rayng", "enabled": true },
+    { "name": "Net2Ray", "channel": "Net2Ray", "enabled": true },
+    { "name": "FreakConfig", "channel": "FreakConfig", "enabled": true },
+    { "name": "configraygan", "channel": "configraygan", "enabled": true },
+    { "name": "V2RAYROZ", "channel": "V2RAYROZ", "enabled": true },
+    { "name": "G0Dv2ray", "channel": "G0Dv2ray", "enabled": true },
+    { "name": "YamYamProxy2", "channel": "YamYamProxy2", "enabled": true },
+    { "name": "chat_naakon", "channel": "chat_naakon", "enabled": true },
+    { "name": "chat_nakoni", "channel": "chat_nakoni", "enabled": true },
+    { "name": "directvvbh", "channel": "directvvbh", "enabled": true },
+    { "name": "harfbzaniiim", "channel": "harfbzaniiim", "enabled": true }
+  ],
+
+  "manual_sources": [
+    { "name": "Manual Config File", "path": "data/manual.txt", "enabled": false }
+  ],
+
+  "settings": {
+    "request_timeout_seconds": 10,
+    "max_retries": 2,
+    "max_file_size_bytes": 5000000,
+    "user_agent": "config-aggregator-bot/1.0"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "brand_name": "یام‌یام پروکسی",
+  "short_name": "YamYamProxy",
+  "description": "تجمیع‌کننده رایگان و عمومی کانفیگ‌های VPN از منابع باز",
+  "telegram": "https://t.me/YamYamProxy",
+  "github": "https://github.com/YOUR_GITHUB_USERNAME/YOUR_REPOSITORY_NAME",
+  "logo": "assets/logo.png",
+  "primary_color": "#2f8fe0",
+  "subscription_url": "https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPOSITORY_NAME/data/sub.txt",
+  "subscription_base64_url": "https://YOUR_GITHUB_USERNAME.github.io/YOUR_REPOSITORY_NAME/data/sub-base64.txt"
+}
