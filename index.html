@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>یام‌یام پروکسی | تجمیع‌کننده کانفیگ‌های رایگان VPN</title>
+<meta name="description" content="تجمیع، دسته‌بندی و انتشار کانفیگ‌های رایگان و عمومی VPN از منابع باز" />
+<link rel="icon" href="assets/logo.png" />
+<link rel="preconnect" href="https://cdnjs.cloudflare.com" />
+<link href="https://cdn.jsdelivr.net/npm/vazirmatn@33.0.3/Vazirmatn-font-face.css" rel="stylesheet" />
+<link rel="stylesheet" href="assets/style.css" />
+</head>
+<body>
+
+<div class="bg-grid" aria-hidden="true">
+  <div class="bg-blob bg-blob-1"></div>
+  <div class="bg-blob bg-blob-2"></div>
+</div>
+
+<header class="site-header">
+  <div class="container header-inner">
+    <div class="brand">
+      <span class="brand-logo-wrap">
+        <img id="brand-logo" src="assets/logo.png" alt="" class="brand-logo" />
+      </span>
+      <span id="brand-name" class="brand-name">یام‌یام پروکسی</span>
+    </div>
+    <nav class="main-nav">
+      <a href="#servers">سرورها</a>
+      <a href="#sources">منابع</a>
+      <a href="#faq">سوالات</a>
+    </nav>
+    <a id="brand-telegram" class="btn btn-ghost" href="https://t.me/YamYamProxy" target="_blank" rel="noopener">تلگرام</a>
+  </div>
+</header>
+
+<main>
+
+  <!-- HERO -->
+  <section class="hero container">
+    <div class="hero-copy">
+     <h1 id="typing-heading" class="hero-title-box"><span id="typing-text">کانفیگ رایگان مولتی لوکیشن</span></h1>
+      <p class="lead">این پروژه کانفیگ‌های عمومی منتشرشده در مخازن GitHub و منابع باز را هر ۲۰ دقیقه یکبار جمع‌آوری، موارد نا‌امن را پاک‌سازی و در یک لینک Subscription واحد منتشر می‌کند.</p>
+      <div class="hero-actions-main">
+        <button class="btn-copy-sub" id="copy-sub-btn">
+          <span class="btn-copy-sub-icon">⧉</span>
+          کپی لینک Subscription
+        </button>
+        <button class="btn btn-secondary" id="show-qr-btn">نمایش QR Code</button>
+      </div>
+      <div class="platform-grid">
+        <button class="platform-card" data-platform="android">
+          <span class="platform-emoji">🤖</span>
+          <span class="platform-label">اندروید</span>
+        </button>
+        <button class="platform-card" data-platform="ios">
+          <span class="platform-emoji">📱</span>
+          <span class="platform-label">آیفون</span>
+        </button>
+        <button class="platform-card" data-platform="desktop">
+          <span class="platform-emoji">💻</span>
+          <span class="platform-label">ویندوز/مک</span>
+        </button>
+      </div>
+    </div>
+    <div class="hero-panel glass">
+      <div class="hero-panel-title">وضعیت لحظه‌ای</div>
+      <div class="stat-grid">
+        <div class="stat stat-violet"><span class="stat-bg"></span><span class="stat-value" id="stat-total">–</span><span class="stat-label">کل کانفیگ‌ها</span></div>
+        <div class="stat stat-green"><span class="stat-bg"></span><span class="stat-value" id="stat-online">–</span><span class="stat-label">آنلاین</span></div>
+        <div class="stat stat-cyan"><span class="stat-bg"></span><span class="stat-value" id="stat-secure">–</span><span class="stat-label">امن (TLS/Reality)</span></div>
+        <div class="stat stat-amber"><span class="stat-bg"></span><span class="stat-value" id="stat-countries">–</span><span class="stat-label">کشور</span></div>
+        <div class="stat stat-pink"><span class="stat-bg"></span><span class="stat-value" id="stat-sources">–</span><span class="stat-label">منبع فعال</span></div>
+        <div class="stat stat-blue"><span class="stat-bg"></span><span class="stat-value" id="stat-updated">–</span><span class="stat-label">آخرین به‌روزرسانی</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PROTOCOL BREAKDOWN -->
+  <section class="container section">
+    <h2 class="section-title">توزیع پروتکل‌ها</h2>
+    <div id="protocol-bars" class="protocol-bars"></div>
+  </section>
+
+  <!-- SERVERS -->
+  <section class="container section" id="servers">
+    <h2 class="section-title">سرورها</h2>
+    <div class="toolbar glass">
+      <input id="search-input" type="search" placeholder="جستجوی نام یا آدرس سرور…" />
+      <select id="filter-protocol">
+        <option value="">همه پروتکل‌ها</option>
+      </select>
+      <select id="filter-country">
+        <option value="">همه کشورها</option>
+      </select>
+      <select id="filter-security">
+        <option value="">همه (امن/ناامن)</option>
+        <option value="secure">فقط امن</option>
+        <option value="insecure">فقط بدون TLS</option>
+      </select>
+      <select id="sort-by">
+        <option value="latency">مرتب‌سازی: کمترین پینگ</option>
+        <option value="country">مرتب‌سازی: کشور</option>
+        <option value="name">مرتب‌سازی: نام</option>
+      </select>
+      <button class="btn btn-ghost" id="refresh-btn">تازه‌سازی</button>
+    </div>
+    <div id="server-list" class="server-list"></div>
+    <p id="server-empty" class="empty-state" hidden>هیچ سروری با این فیلتر پیدا نشد.</p>
+  </section>
+  
+  <!-- FAQ -->
+  <section class="container section" id="faq">
+    <h2 class="section-title">سوالات متداول</h2>
+    <div class="faq-list">
+      <details class="glass">
+        <summary>آیا این یک سرویس VPN اختصاصی است؟</summary>
+        <p>خیر. این پروژه صرفاً کانفیگ‌های رایگان و عمومی منتشرشده توسط دیگران را جمع‌آوری و دسته‌بندی می‌کند و مالک هیچ سروری نیست.</p>
+      </details>
+      <details class="glass">
+        <summary>چرا برخی سرورها آفلاین نشان داده می‌شوند؟</summary>
+        <p>سرورهای عمومی رایگان ممکن است هر لحظه توسط صاحبشان تغییر کنند یا از دسترس خارج شوند. بررسی وضعیت هر چند ساعت یک‌بار انجام می‌شود.</p>
+      </details>
+      <details class="glass">
+        <summary>آیا استفاده از این کانفیگ‌ها امن است؟</summary>
+        <p>امنیت کامل هیچ کانفیگ رایگانی تضمین‌شده نیست. لطفاً بخش هشدار امنیتی را پیش از استفاده مطالعه کنید.</p>
+      </details>
+    </div>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <div class="container footer-inner">
+    <span>© <span id="footer-year"></span> <span class="footer-brand-name">یام‌یام پروکسی</span> — کانفیگ و پروکسی رایگان همراه با آموزش هوش مصنوعی</span>
+    <div class="footer-links">
+      <a id="footer-telegram" href="https://t.me/YamYamProxy" target="_blank" rel="noopener">Join the Telegram channel</a>
+    </div>
+  </div>
+</footer>
+
+<!-- QR MODAL -->
+<div id="qr-modal" class="modal-overlay" hidden>
+  <div class="modal glass">
+    <button class="modal-close" id="qr-close">✕</button>
+    <h3>QR Code لینک Subscription</h3>
+    <div id="qr-code-container"></div>
+    <button class="btn btn-primary" id="qr-download">دانلود QR Code</button>
+  </div>
+</div>
+
+<!-- PLATFORM APPS MODAL -->
+<div id="platform-apps-modal" class="modal-overlay" hidden>
+  <div class="modal glass modal-wide">
+    <button class="modal-close" id="platform-apps-close">✕</button>
+    <h3 id="platform-apps-title">برنامه‌ها</h3>
+    <div id="platform-apps-list" class="platform-apps-list"></div>
+  </div>
+</div>
+
+<!-- APP DETAIL MODAL -->
+<div id="app-detail-modal" class="modal-overlay" hidden>
+  <div class="modal glass modal-wide">
+    <button class="modal-close" id="app-detail-close">✕</button>
+    <button class="modal-back" id="app-detail-back">→ بازگشت</button>
+    <h3 id="app-detail-title"></h3>
+    <a class="btn btn-primary app-detail-download" id="app-detail-download" target="_blank" rel="noopener">دانلود برنامه</a>
+    <h4 class="app-detail-steps-title">آموزش افزودن لینک Subscription</h4>
+    <ol id="app-detail-steps" class="app-detail-steps"></ol>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<script src="assets/apps-data.js"></script>
+<script src="assets/script.js"></script>
+</body>
+</html>
