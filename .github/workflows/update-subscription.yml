@@ -26,9 +26,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout repository
+      - name: Checkout latest main
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Set up Python
@@ -39,48 +40,49 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run collector -> parser -> deduplicator -> validator -> generator
-        run: python scripts/generator.py
-
-      - name: Check for changes
-        id: git_check
+      - name: Generate and persist latest subscription snapshot
         run: |
-          git add data/
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Commit and push changes
-        if: steps.git_check.outputs.changed == 'true'
-        run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore: update subscription data [automated]"
 
-          # main may advance while validation is running (for example, a workflow
-          # or code fix may be committed). Rebase the generated data commit onto
-          # the newest main before pushing instead of losing a successful run.
+          # Generated data files are snapshots, not hand-edited source code. If
+          # main advances while validation is running, rebasing two independently
+          # generated snapshots creates meaningless conflicts. Instead, always
+          # regenerate from the newest main and retry the whole snapshot commit.
           for attempt in 1 2 3; do
+            echo "Collector snapshot attempt ${attempt}/3"
+
             git fetch origin main
-            if git rebase origin/main && git push origin HEAD:main; then
+            git reset --hard origin/main
+
+            python scripts/generator.py
+            git add data/
+
+            if git diff --cached --quiet; then
+              echo "Collector produced no data changes."
               exit 0
             fi
 
-            echo "Collector push attempt ${attempt} failed; recovering before retry..."
-            git rebase --abort 2>/dev/null || true
+            git commit -m "chore: update subscription data [automated]"
+
+            if git push origin HEAD:main; then
+              echo "Fresh collector snapshot persisted successfully."
+              exit 0
+            fi
+
+            echo "Main advanced during snapshot attempt ${attempt}; regenerating from the new main..."
             sleep $((attempt * 5))
           done
 
-          echo "Failed to persist fresh collector data after 3 attempts." >&2
+          echo "Failed to persist a fresh collector snapshot after 3 full regeneration attempts." >&2
           exit 1
 
   deploy-pages:
     needs: update
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout latest main
         uses: actions/checkout@v4
         with:
           ref: main
