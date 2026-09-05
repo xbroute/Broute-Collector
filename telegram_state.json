@@ -1,23 +1,38 @@
 {
   "sent": [
+    "08340d266ba871e6",
+    "273a2cf7fd22de11",
+    "2e7b8ac5f3706391",
     "2e81aac646d145dc",
+    "38178f2c67b08905",
+    "4c772f42ad06f405",
     "60f059ef41ac042f",
     "645354b5ad45f244",
+    "6e0d3953cf525e7c",
     "82f89bf483c2a03b",
     "84cc8d0d5988c4fe",
+    "ade7437c3a975b8a",
     "c3ac379be37adaca",
     "d551e7ecb6f996ec",
     "f51c5fc743bf2026"
   ],
+  "sent_fingerprints": [
+    "006b0b96f2776a8abb120833",
+    "4241931f7ff1e61f35a21100",
+    "5033b2516c9ca8cf1fd0b2ce",
+    "5a25648791e43264cbb22e04",
+    "6393d19d60f8d27b52772adb",
+    "67ffac9530886f587cb57f11",
+    "68bc2a7ea8f2ffd2b41fafb2",
+    "92139bd4b318721d2d27fce8",
+    "9a4a353a2514bf6b55cb3014",
+    "cddb56131c65622ad47c4eaa",
+    "da46ce7b409e81faedbca3ad",
+    "e08ccd56c79bf05a79f1b51e",
+    "f736eed6b872a6c19e00191f",
+    "fa123dea2935906deb379d4c"
+  ],
   "queue": [
-    "4ca8661782b16989",
-    "ade7437c3a975b8a",
-    "6e0d3953cf525e7c",
-    "2e7b8ac5f3706391",
-    "08340d266ba871e6",
-    "4c772f42ad06f405",
-    "273a2cf7fd22de11",
-    "38178f2c67b08905",
     "f9c74a6eb41ab07a",
     "72f21616ae227462",
     "ba0996ddbe52b283",
@@ -220,7 +235,6 @@
     "b6c4cfc0ec14e985",
     "4d154e524e6a5fab",
     "8db4e47da930355f",
-    "914141d75065a959",
     "31f98284f9ed7fec",
     "9413cdccc591048d",
     "43c1fbf4aea022a1",
@@ -236,7 +250,6 @@
     "7e87c685fa461e29",
     "b497c4a7dbe55c2d",
     "8bb079fe8e0487b7",
-    "26c1d3c861e76d64",
     "bbc72481f1105220",
     "a111d65961ac7e28",
     "d148e8896b4a714c",
@@ -304,7 +317,6 @@
     "02e94764cac7d637",
     "16d32521bb687ee2",
     "07016018345b139c",
-    "54bd5216a40fc439",
     "2ee48030f00a5e9e",
     "be2031d856aeaaef",
     "dff448d12e50bdd4",
@@ -355,5 +367,5 @@
     "6afa966aeb76db84",
     "62ce3fc8dbc53d60"
   ],
-  "next_send_after": 1788620498
+  "next_send_after": 1788620956
 }
