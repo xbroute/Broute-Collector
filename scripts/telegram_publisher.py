@@ -317,6 +317,7 @@ def send_message(token: str, chat_id: str, topic_id: int, text: str) -> None:
         "chat_id": chat_id,
         "message_thread_id": topic_id,
         "text": text,
+        "disable_notification": True,
         "link_preview_options": {"is_disabled": True},
     }
 
