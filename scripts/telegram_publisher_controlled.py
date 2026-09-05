@@ -1,10 +1,11 @@
-"""Run telegram_publisher with a live ON/OFF control switch.
+"""Run telegram_publisher with live ON/OFF control and bot command polling.
 
-This wrapper leaves the publisher's queue/dedupe/send logic untouched. It only
-checks the remote control flag before each send cycle and during pacing sleeps.
-If the flag becomes OFF, it exits gracefully without mutating the in-memory
-candidate that was popped after the last durable checkpoint, so the persisted
-queue remains recoverable when publishing is turned back ON.
+The active publisher is the primary Telegram command consumer. This removes the
+critical dependency on GitHub's scheduled workflow for OFF commands: while a
+publisher run is alive, it polls pending bot commands during pacing and again
+immediately before validation/send. The durable control flag on ``main`` remains
+the source of truth, so an OFF command stops the run gracefully without losing
+the persisted queue.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import os
 import sys
 import time
 
+import telegram_bot_control as bot_control
 import telegram_publisher as publisher
 from telegram_publisher_control import remote_enabled
 
@@ -19,13 +21,54 @@ CHECK_INTERVAL_SECONDS = max(
     2,
     int(os.environ.get("TELEGRAM_CONTROL_CHECK_INTERVAL_SECONDS", "5")),
 )
+BOT_POLL_INTERVAL_SECONDS = max(
+    2,
+    int(os.environ.get("TELEGRAM_BOT_POLL_INTERVAL_SECONDS", "5")),
+)
 
 
 class PublishingDisabled(RuntimeError):
     pass
 
 
-def ensure_enabled() -> None:
+_last_bot_poll_monotonic = 0.0
+
+
+def poll_bot_commands(*, force: bool = False) -> None:
+    """Process pending publisher-control commands without killing publishing on
+    transient Bot/GitHub API failures.
+
+    The remote control flag is checked separately and fail-closed by
+    ``remote_enabled``. A temporary inability to poll Telegram should therefore
+    not corrupt queue state or turn publishing on by accident.
+    """
+    global _last_bot_poll_monotonic
+
+    now = time.monotonic()
+    if not force and now - _last_bot_poll_monotonic < BOT_POLL_INTERVAL_SECONDS:
+        return
+    _last_bot_poll_monotonic = now
+
+    try:
+        rc = bot_control.main()
+        if rc != 0:
+            print(
+                f"[telegram-control] bot command poll returned {rc}; "
+                "publisher will keep honoring the durable control flag.",
+                file=sys.stderr,
+                flush=True,
+            )
+    except Exception as exc:
+        print(
+            f"[telegram-control] bot command poll failed: {exc}; "
+            "publisher will keep honoring the durable control flag.",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
+def ensure_enabled(*, force_bot_poll: bool = False) -> None:
+    poll_bot_commands(force=force_bot_poll)
     if not remote_enabled("."):
         raise PublishingDisabled("Telegram publisher is switched OFF")
 
@@ -41,7 +84,7 @@ def controlled_wait_until_next_slot(next_send_after: float) -> None:
         if first:
             print(
                 f"[telegram] pacing delay: sleeping {remaining:.1f}s "
-                f"(control checked every {CHECK_INTERVAL_SECONDS}s)",
+                f"(control/bot checked every {CHECK_INTERVAL_SECONDS}s)",
                 flush=True,
             )
             first = False
@@ -51,18 +94,26 @@ def controlled_wait_until_next_slot(next_send_after: float) -> None:
 
 def main() -> int:
     original_live_validate = publisher.live_validate
+    original_send_message = publisher.send_message
 
     def controlled_live_validate(server):
-        # One last remote check immediately before the live network validation
-        # and subsequent Telegram send path.
-        ensure_enabled()
+        # Poll immediately before network validation. This lets a pending OFF
+        # command stop the candidate before any new send path begins.
+        ensure_enabled(force_bot_poll=True)
         return original_live_validate(server)
+
+    def controlled_send_message(token, chat_id, topic_id, text):
+        # A second check closes the small gap between validation and send.
+        ensure_enabled(force_bot_poll=True)
+        return original_send_message(token, chat_id, topic_id, text)
 
     publisher.wait_until_next_slot = controlled_wait_until_next_slot
     publisher.live_validate = controlled_live_validate
+    publisher.send_message = controlled_send_message
 
     try:
-        ensure_enabled()
+        # On startup, consume pending bot commands before touching the queue.
+        ensure_enabled(force_bot_poll=True)
         return publisher.main()
     except PublishingDisabled:
         print(
