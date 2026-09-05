@@ -17,11 +17,13 @@ on:
       - main
     paths:
       - "scripts/telegram_bot_control.py"
+      - "scripts/telegram_bot_control_verified.py"
       - "scripts/telegram_publisher.py"
       - "scripts/telegram_publisher_control.py"
       - "scripts/telegram_publisher_controlled.py"
       - "scripts/telegram_copy_format.py"
       - "tests/test_telegram_bot_control.py"
+      - "tests/test_telegram_bot_control_verified.py"
       - "tests/test_telegram_publisher.py"
       - ".github/workflows/telegram-bot-control.yml"
   pull_request:
@@ -29,11 +31,13 @@ on:
       - main
     paths:
       - "scripts/telegram_bot_control.py"
+      - "scripts/telegram_bot_control_verified.py"
       - "scripts/telegram_publisher.py"
       - "scripts/telegram_publisher_control.py"
       - "scripts/telegram_publisher_controlled.py"
       - "scripts/telegram_copy_format.py"
       - "tests/test_telegram_bot_control.py"
+      - "tests/test_telegram_bot_control_verified.py"
       - "tests/test_telegram_publisher.py"
       - ".github/workflows/telegram-bot-control.yml"
 
@@ -69,6 +73,7 @@ jobs:
         run: |
           python -m py_compile \
             scripts/telegram_bot_control.py \
+            scripts/telegram_bot_control_verified.py \
             scripts/telegram_publisher.py \
             scripts/telegram_publisher_controlled.py \
             scripts/telegram_publisher_control.py \
@@ -76,7 +81,11 @@ jobs:
 
       - name: Run Telegram regression tests
         if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        run: python -m unittest tests.test_telegram_bot_control tests.test_telegram_publisher -v
+        run: |
+          python -m unittest \
+            tests.test_telegram_bot_control \
+            tests.test_telegram_bot_control_verified \
+            tests.test_telegram_publisher -v
 
       - name: Verify Telegram admin authorization path
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -102,4 +111,4 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           TELEGRAM_CONTROL_CHAT_ID: "-1004469276021"
-        run: python scripts/telegram_bot_control.py
+        run: python scripts/telegram_bot_control_verified.py
