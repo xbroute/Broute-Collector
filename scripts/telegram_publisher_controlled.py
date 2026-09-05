@@ -1,10 +1,14 @@
-"""Run telegram_publisher with live ON/OFF control only.
+"""Run telegram_publisher with live ON/OFF control and copy-friendly output.
 
 Telegram commands are consumed exclusively by the dedicated Telegram Bot Control
 workflow. This wrapper NEVER calls getUpdates. It only reads the durable control
 flag from main every few seconds and immediately before validation/send, so an
 OFF command that has been persisted by the bot poller stops publishing cleanly
 without losing queue state.
+
+For outgoing configs, the complete config is rendered as Telegram HTML <pre>.
+When the exact config is at most 256 characters, the payload also receives the
+Bot API native CopyTextButton. Longer configs are never truncated.
 """
 from __future__ import annotations
 
@@ -13,6 +17,7 @@ import sys
 import time
 
 import telegram_publisher as publisher
+from telegram_copy_format import decorate_send_payload, make_copyable_message
 from telegram_publisher_control import remote_enabled
 
 CHECK_INTERVAL_SECONDS = max(
@@ -50,8 +55,16 @@ def controlled_wait_until_next_slot(next_send_after: float) -> None:
 
 
 def main() -> int:
+    original_build_message = publisher.build_message
     original_live_validate = publisher.live_validate
     original_send_message = publisher.send_message
+    original_telegram_request_once = publisher._telegram_request_once
+
+    def copyable_build_message(server):
+        plain_message = original_build_message(server)
+        protocol = str(server.get("protocol") or "").lower()
+        config = publisher.brand_raw_config(str(server.get("raw") or ""), protocol)
+        return make_copyable_message(plain_message, config)
 
     def controlled_live_validate(server):
         ensure_enabled()
@@ -61,9 +74,17 @@ def main() -> int:
         ensure_enabled()
         return original_send_message(token, chat_id, topic_id, text)
 
+    def decorated_telegram_request_once(token, payload):
+        # Keep presentation decoration at the last possible point so the
+        # publisher's queue/dedupe/state logic continues to operate on the exact
+        # config and Telegram's visible 4096-character limit.
+        return original_telegram_request_once(token, decorate_send_payload(payload))
+
+    publisher.build_message = copyable_build_message
     publisher.wait_until_next_slot = controlled_wait_until_next_slot
     publisher.live_validate = controlled_live_validate
     publisher.send_message = controlled_send_message
+    publisher._telegram_request_once = decorated_telegram_request_once
 
     try:
         ensure_enabled()

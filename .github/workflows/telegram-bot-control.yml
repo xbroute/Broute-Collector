@@ -1,16 +1,40 @@
 name: Telegram Bot Control
 
 on:
+  # GitHub cron is a backup only. workflow_run hooks below provide a second,
+  # independently scheduled path so control commands are not stranded when
+  # scheduled Actions are delayed.
   schedule:
     - cron: "1-56/5 * * * *"
+  workflow_run:
+    workflows:
+      - "Update Subscription"
+      - "Publish Telegram Configs"
+    types: [completed]
   workflow_dispatch: {}
   push:
     branches:
       - main
     paths:
       - "scripts/telegram_bot_control.py"
+      - "scripts/telegram_publisher.py"
+      - "scripts/telegram_publisher_control.py"
       - "scripts/telegram_publisher_controlled.py"
+      - "scripts/telegram_copy_format.py"
       - "tests/test_telegram_bot_control.py"
+      - "tests/test_telegram_publisher.py"
+      - ".github/workflows/telegram-bot-control.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "scripts/telegram_bot_control.py"
+      - "scripts/telegram_publisher.py"
+      - "scripts/telegram_publisher_control.py"
+      - "scripts/telegram_publisher_controlled.py"
+      - "scripts/telegram_copy_format.py"
+      - "tests/test_telegram_bot_control.py"
+      - "tests/test_telegram_publisher.py"
       - ".github/workflows/telegram-bot-control.yml"
 
 permissions:
@@ -23,34 +47,39 @@ concurrency:
 
 jobs:
   poll:
+    # workflow_run can theoretically be emitted for another branch. Never let
+    # such a run consume the production bot's update queue.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.head_branch == 'main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: Checkout latest main
+      - name: Checkout latest code
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Compile Telegram control scripts
-        if: github.event_name != 'schedule'
+      - name: Compile Telegram scripts
+        if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: |
           python -m py_compile \
             scripts/telegram_bot_control.py \
+            scripts/telegram_publisher.py \
             scripts/telegram_publisher_controlled.py \
-            scripts/telegram_publisher_control.py
+            scripts/telegram_publisher_control.py \
+            scripts/telegram_copy_format.py
 
-      - name: Run Telegram control unit tests
-        if: github.event_name != 'schedule'
-        run: python -m unittest tests.test_telegram_bot_control -v
+      - name: Run Telegram regression tests
+        if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: python -m unittest tests.test_telegram_bot_control tests.test_telegram_publisher -v
 
       - name: Verify Telegram admin authorization path
-        if: github.event_name != 'schedule'
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -68,6 +97,7 @@ jobs:
           PY
 
       - name: Process Telegram publisher commands
+        if: github.event_name != 'pull_request'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
