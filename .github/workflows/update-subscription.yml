@@ -2,8 +2,15 @@ name: Update Subscription
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "3-58/5 * * * *"
   workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/update-subscription.yml"
+      - "scripts/**"
+      - "requirements.txt"
 
 permissions:
   contents: write
