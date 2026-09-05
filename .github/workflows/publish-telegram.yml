@@ -58,7 +58,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "chore: update Telegram publisher state [automated]"
-          git push
+          git push origin HEAD:telegram-state
 
       - name: Warn if Telegram publishing failed
         if: steps.telegram_publish.outcome == 'failure'
