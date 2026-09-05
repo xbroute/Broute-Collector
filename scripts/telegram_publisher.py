@@ -1,36 +1,40 @@
-"""Publish newly discovered online configs to a Telegram forum topic.
+"""Publish online configs to a Telegram forum topic using a persistent queue.
 
 Required environment variables:
     TELEGRAM_BOT_TOKEN
     TELEGRAM_CHAT_ID
     TELEGRAM_TOPIC_ID
 
-Only configs that are online, valid and not marked for removal are published.
-Each config is sent once and each Telegram message contains exactly one config.
-Previously published messages are intentionally left untouched if a config later
-becomes unavailable.
+Optional environment variable:
+    TELEGRAM_STATE_PATH
+
+The queue is persistent and keeps its order across collector refreshes. New online
+configs are appended to the end of the queue. Queued configs that are no longer
+online in the latest servers.json snapshot are dropped before publishing and may
+be queued again later if they become online again. Already-sent configs are never
+sent twice, and old Telegram messages are intentionally left untouched if a config
+later becomes unavailable.
 """
 from __future__ import annotations
 
 import json
 import os
+import random
 import sys
 import time
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from common import country_flag, load_json, rename_raw_config, save_json
 
 SERVERS_PATH = "data/servers.json"
-STATE_PATH = "data/telegram_state.json"
+STATE_PATH = os.environ.get("TELEGRAM_STATE_PATH", "data/telegram_state.json")
 BRAND_NAME = "@xbroute"
 
-# Telegram's official bot FAQ recommends staying below 20 messages/minute in a
-# group. 3.2 seconds keeps us just under that ceiling, and the per-run cap keeps
-# a 5-minute GitHub Actions schedule from piling up overlapping jobs.
-SEND_DELAY_SECONDS = 3.2
-MAX_MESSAGES_PER_RUN = 80
+MIN_SEND_DELAY_SECONDS = 30
+MAX_SEND_DELAY_SECONDS = 90
+MAX_MESSAGES_PER_RUN = 10
 MAX_TELEGRAM_TEXT_LENGTH = 4096
 MAX_RATE_LIMIT_RETRIES = 3
 
@@ -121,19 +125,100 @@ def build_message(server: Dict) -> str:
     return message
 
 
-def load_sent_ids() -> Set[str]:
-    state = load_json(STATE_PATH, {"sent": []})
-    if isinstance(state, dict):
-        sent = state.get("sent", [])
-    elif isinstance(state, list):
-        sent = state
+def load_state() -> Tuple[Set[str], List[str], float]:
+    raw_state = load_json(
+        STATE_PATH,
+        {"sent": [], "queue": [], "next_send_after": 0},
+    )
+
+    # Backward compatibility with the first implementation where state could be
+    # either a plain list or a dict containing only `sent`.
+    if isinstance(raw_state, list):
+        sent_raw = raw_state
+        queue_raw = []
+        next_send_after = 0.0
+    elif isinstance(raw_state, dict):
+        sent_raw = raw_state.get("sent", [])
+        queue_raw = raw_state.get("queue", [])
+        try:
+            next_send_after = float(raw_state.get("next_send_after", 0) or 0)
+        except (TypeError, ValueError):
+            next_send_after = 0.0
     else:
-        sent = []
-    return {str(item) for item in sent if item}
+        sent_raw = []
+        queue_raw = []
+        next_send_after = 0.0
+
+    sent_ids = {str(item) for item in sent_raw if item}
+
+    queue: List[str] = []
+    seen: Set[str] = set()
+    for item in queue_raw:
+        server_id = str(item)
+        if not server_id or server_id in seen or server_id in sent_ids:
+            continue
+        seen.add(server_id)
+        queue.append(server_id)
+
+    return sent_ids, queue, next_send_after
 
 
-def save_sent_ids(sent_ids: Set[str]) -> None:
-    save_json(STATE_PATH, {"sent": sorted(sent_ids)})
+def save_state(sent_ids: Set[str], queue: List[str], next_send_after: float) -> None:
+    save_json(
+        STATE_PATH,
+        {
+            "sent": sorted(sent_ids),
+            "queue": queue,
+            "next_send_after": int(next_send_after),
+        },
+    )
+
+
+def sync_queue(
+    servers: List[Dict],
+    sent_ids: Set[str],
+    queue: List[str],
+) -> Tuple[Dict[str, Dict], List[str], int, int]:
+    """Reconcile the persistent queue with the latest validated online snapshot.
+
+    Existing queue order is preserved. Entries that are no longer online are
+    removed. Newly discovered online configs are appended at the end.
+    """
+    online_by_id: Dict[str, Dict] = {}
+    ordered_online_ids: List[str] = []
+
+    for server in servers:
+        if not eligible(server):
+            continue
+        server_id = str(server["id"])
+        if server_id not in online_by_id:
+            online_by_id[server_id] = server
+            ordered_online_ids.append(server_id)
+
+    clean_queue: List[str] = []
+    queued_ids: Set[str] = set()
+    removed_stale = 0
+
+    for server_id in queue:
+        if server_id in sent_ids:
+            continue
+        if server_id not in online_by_id:
+            removed_stale += 1
+            continue
+        if server_id in queued_ids:
+            continue
+        clean_queue.append(server_id)
+        queued_ids.add(server_id)
+
+    added_new = 0
+    for server_id in ordered_online_ids:
+        if server_id in sent_ids or server_id in queued_ids:
+            continue
+        clean_queue.append(server_id)
+        queued_ids.add(server_id)
+        added_new += 1
+
+    return online_by_id, clean_queue, added_new, removed_stale
 
 
 def _telegram_request(token: str, payload: Dict) -> Dict:
@@ -198,15 +283,47 @@ def send_message(token: str, chat_id: str, topic_id: int, text: str) -> None:
         return
 
 
+def wait_until_next_slot(next_send_after: float) -> None:
+    now = time.time()
+    if next_send_after <= now:
+        return
+
+    sleep_for = next_send_after - now
+    print(f"[telegram] pacing delay: sleeping {sleep_for:.1f}s")
+    time.sleep(sleep_for)
+
+
 def main() -> int:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
     topic_raw = os.environ.get("TELEGRAM_TOPIC_ID", "").strip()
 
+    servers: List[Dict] = load_json(SERVERS_PATH, [])
+    if not isinstance(servers, list):
+        print("[telegram] servers.json is not a list.", file=sys.stderr)
+        return 1
+
+    sent_ids, queue, next_send_after = load_state()
+    online_by_id, queue, added_new, removed_stale = sync_queue(
+        servers,
+        sent_ids,
+        queue,
+    )
+
+    # Persist queue reconciliation even when the bot token has not been configured
+    # yet. When the token is added later, publishing starts from a clean queue of
+    # configs that are still online at that time.
+    save_state(sent_ids, queue, next_send_after)
+    print(
+        f"[telegram] queue synced: {len(queue)} pending, "
+        f"{added_new} added, {removed_stale} stale removed, "
+        f"{len(sent_ids)} already sent."
+    )
+
     if not token or not chat_id or not topic_raw:
         print(
-            "[telegram] skipped: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID and "
-            "TELEGRAM_TOPIC_ID must all be configured."
+            "[telegram] publishing skipped: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID "
+            "and TELEGRAM_TOPIC_ID must all be configured."
         )
         return 0
 
@@ -216,46 +333,52 @@ def main() -> int:
         print("[telegram] TELEGRAM_TOPIC_ID must be an integer.", file=sys.stderr)
         return 1
 
-    servers: List[Dict] = load_json(SERVERS_PATH, [])
-    if not isinstance(servers, list):
-        print("[telegram] servers.json is not a list.", file=sys.stderr)
-        return 1
-
-    sent_ids = load_sent_ids()
-    pending = [
-        server
-        for server in servers
-        if eligible(server) and str(server["id"]) not in sent_ids
-    ]
-    pending = pending[:MAX_MESSAGES_PER_RUN]
-
-    if not pending:
-        print("[telegram] no new online configs to publish.")
+    if not queue:
+        print("[telegram] no online configs are waiting in the queue.")
         return 0
 
     published = 0
-    for index, server in enumerate(pending):
-        server_id = str(server["id"])
+    while queue and published < MAX_MESSAGES_PER_RUN:
+        server_id = queue.pop(0)
+        server = online_by_id.get(server_id)
+
+        # This can happen only if the queue was externally edited between sync and
+        # publishing. Drop it safely rather than blocking the queue.
+        if server is None or server_id in sent_ids:
+            save_state(sent_ids, queue, next_send_after)
+            continue
+
+        wait_until_next_slot(next_send_after)
+
         try:
             message = build_message(server)
             send_message(token, chat_id, topic_id, message)
         except Exception as exc:
-            # Successful sends are persisted immediately in the local state file.
-            # The workflow keeps going after this step so the state can still be
-            # committed, preventing duplicate sends on the next scheduled run.
-            save_sent_ids(sent_ids)
+            # Put the failed item back at the front so it is retried first next run.
+            queue.insert(0, server_id)
+            save_state(sent_ids, queue, next_send_after)
             print(f"[telegram] failed for {server_id}: {exc}", file=sys.stderr)
             return 1
 
         sent_ids.add(server_id)
-        save_sent_ids(sent_ids)
         published += 1
-        print(f"[telegram] published {server_id}")
 
-        if index < len(pending) - 1:
-            time.sleep(SEND_DELAY_SECONDS)
+        # Pick the next allowed send time immediately after a successful message.
+        # Keeping this timestamp in persistent state also enforces the minimum delay
+        # when a new GitHub Actions run starts right after the previous one.
+        delay = random.randint(MIN_SEND_DELAY_SECONDS, MAX_SEND_DELAY_SECONDS)
+        next_send_after = time.time() + delay
+        save_state(sent_ids, queue, next_send_after)
 
-    print(f"[telegram] done. {published} new configs published.")
+        print(
+            f"[telegram] published {server_id}; next delay {delay}s; "
+            f"{len(queue)} still queued."
+        )
+
+    print(
+        f"[telegram] done. {published} published this run; "
+        f"{len(queue)} remain queued."
+    )
     return 0
 
 
