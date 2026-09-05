@@ -58,7 +58,17 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "chore: update Telegram publisher state [automated]"
-          git push origin HEAD:telegram-state
+
+          for attempt in 1 2 3; do
+            if git push origin HEAD:telegram-state; then
+              exit 0
+            fi
+            echo "State push attempt ${attempt} failed; retrying in 5 seconds..."
+            sleep 5
+          done
+
+          echo "Failed to persist Telegram state after 3 attempts." >&2
+          exit 1
 
       - name: Warn if Telegram publishing failed
         if: steps.telegram_publish.outcome == 'failure'
