@@ -20,6 +20,19 @@ on:
       - "scripts/telegram_publisher.py"
       - "scripts/telegram_publisher_control.py"
       - "scripts/telegram_publisher_controlled.py"
+      - "scripts/telegram_copy_format.py"
+      - "tests/test_telegram_bot_control.py"
+      - "tests/test_telegram_publisher.py"
+      - ".github/workflows/telegram-bot-control.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "scripts/telegram_bot_control.py"
+      - "scripts/telegram_publisher.py"
+      - "scripts/telegram_publisher_control.py"
+      - "scripts/telegram_publisher_controlled.py"
+      - "scripts/telegram_copy_format.py"
       - "tests/test_telegram_bot_control.py"
       - "tests/test_telegram_publisher.py"
       - ".github/workflows/telegram-bot-control.yml"
@@ -41,10 +54,10 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - name: Checkout latest main
+      - name: Checkout latest code
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -52,16 +65,17 @@ jobs:
           python-version: "3.11"
 
       - name: Compile Telegram scripts
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: |
           python -m py_compile \
             scripts/telegram_bot_control.py \
             scripts/telegram_publisher.py \
             scripts/telegram_publisher_controlled.py \
-            scripts/telegram_publisher_control.py
+            scripts/telegram_publisher_control.py \
+            scripts/telegram_copy_format.py
 
       - name: Run Telegram regression tests
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: python -m unittest tests.test_telegram_bot_control tests.test_telegram_publisher -v
 
       - name: Verify Telegram admin authorization path
@@ -83,6 +97,7 @@ jobs:
           PY
 
       - name: Process Telegram publisher commands
+        if: github.event_name != 'pull_request'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
