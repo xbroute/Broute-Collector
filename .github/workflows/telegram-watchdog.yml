@@ -23,8 +23,23 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Check publisher control
+        id: publisher_control
+        run: python3 scripts/telegram_publisher_control.py --source local
+
+      - name: Publisher intentionally OFF
+        if: steps.publisher_control.outputs.enabled != 'true'
+        run: |
+          echo "Telegram publisher is OFF. Watchdog intentionally does not dispatch anything."
+
       - name: Check for active or waiting publisher runs
         id: publisher_activity
+        if: steps.publisher_control.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -48,7 +63,7 @@ jobs:
             exit 1
           fi
 
-          active=$(printf '%s' "${response}" | python -c '
+          active=$(printf '%s' "${response}" | python3 -c '
           import json, sys
           data = json.load(sys.stdin)
           active_statuses = {"queued", "in_progress", "pending", "requested", "waiting"}
@@ -59,12 +74,12 @@ jobs:
           echo "Active/waiting publisher runs: ${active}"
 
       - name: Dispatch publisher only when none is active
-        if: steps.publisher_activity.outputs.active == '0'
+        if: steps.publisher_control.outputs.enabled == 'true' && steps.publisher_activity.outputs.active == '0'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo "No publisher run is active or waiting; dispatching one recovery run."
+          echo "Publisher is ON and no run is active or waiting; dispatching one recovery run."
 
           for attempt in 1 2 3 4 5; do
             if curl --fail-with-body --silent --show-error \
@@ -86,6 +101,6 @@ jobs:
           exit 1
 
       - name: Publisher already covered
-        if: steps.publisher_activity.outputs.active != '0'
+        if: steps.publisher_control.outputs.enabled == 'true' && steps.publisher_activity.outputs.active != '0'
         run: |
-          echo "Publisher already has an active/waiting run; watchdog intentionally does nothing."
+          echo "Publisher is ON and already has an active/waiting run; watchdog intentionally does nothing."
