@@ -9,6 +9,8 @@ on:
       - main
     paths:
       - "scripts/telegram_bot_control.py"
+      - "scripts/telegram_publisher_controlled.py"
+      - "tests/test_telegram_bot_control.py"
       - ".github/workflows/telegram-bot-control.yml"
 
 permissions:
@@ -34,6 +36,18 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Compile Telegram control scripts
+        if: github.event_name != 'schedule'
+        run: |
+          python -m py_compile \
+            scripts/telegram_bot_control.py \
+            scripts/telegram_publisher_controlled.py \
+            scripts/telegram_publisher_control.py
+
+      - name: Run Telegram control unit tests
+        if: github.event_name != 'schedule'
+        run: python -m unittest tests.test_telegram_bot_control -v
 
       - name: Process Telegram publisher commands
         env:
