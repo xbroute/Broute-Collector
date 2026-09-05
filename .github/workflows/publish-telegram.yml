@@ -1,0 +1,66 @@
+name: Publish Telegram Configs
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "telegram-publisher"
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout collector snapshot
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: app
+
+      - name: Checkout persistent Telegram state
+        uses: actions/checkout@v4
+        with:
+          ref: telegram-state
+          path: state
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Publish queued online configs
+        id: telegram_publish
+        continue-on-error: true
+        working-directory: app
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: "-1004469276021"
+          TELEGRAM_TOPIC_ID: "1944"
+          TELEGRAM_STATE_PATH: "../state/telegram_state.json"
+        run: python scripts/telegram_publisher.py
+
+      - name: Commit Telegram queue state
+        working-directory: state
+        run: |
+          git add telegram_state.json
+          if git diff --cached --quiet; then
+            echo "No Telegram state changes to commit."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: update Telegram publisher state [automated]"
+          git push
+
+      - name: Warn if Telegram publishing failed
+        if: steps.telegram_publish.outcome == 'failure'
+        run: |
+          echo "::warning::Telegram publishing failed. The queue state was preserved and the failed config remains at the front for a later retry."
