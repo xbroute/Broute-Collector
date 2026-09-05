@@ -8,15 +8,15 @@ Required environment variables:
 Optional environment variable:
     TELEGRAM_STATE_PATH
 
-The queue is persistent and keeps its order across collector refreshes. New online
-configs are appended to the end of the queue. Queued configs that are no longer
-online in the latest servers.json snapshot are dropped before publishing and may
-be queued again later if they become online again. Already-sent configs are never
-sent twice, and old Telegram messages are intentionally left untouched if a config
-later becomes unavailable.
+Telegram publishing has its own semantic de-duplication layer. The collector keeps
+distinct endpoint IPs, while the publisher can collapse CDN-front variants that
+share the same protocol, credentials and routing parameters.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
+import ipaddress
 import json
 import os
 import random
@@ -25,6 +25,7 @@ import sys
 import time
 from typing import Dict, List, Set, Tuple
 from urllib.error import HTTPError, URLError
+from urllib.parse import parse_qsl, unquote, urlsplit
 from urllib.request import Request, urlopen
 
 from common import country_flag, load_json, rename_raw_config, save_json
@@ -35,8 +36,6 @@ BRAND_NAME = "@xbroute"
 
 MIN_SEND_DELAY_SECONDS = 30
 MAX_SEND_DELAY_SECONDS = 90
-# Keep one publisher run alive long enough that the next 5-minute scheduled run is
-# already pending. The reserve lets us hand state back safely before Actions timeout.
 RUN_BUDGET_SECONDS = 9 * 60
 RUN_STOP_RESERVE_SECONDS = 60
 MAX_TELEGRAM_TEXT_LENGTH = 4096
@@ -67,6 +66,8 @@ TRANSPORT_LABELS = {
     "h2": "HTTP/2",
 }
 
+CDN_AWARE_PROTOCOLS = {"vless", "vmess", "trojan", "hysteria2", "tuic"}
+
 
 def eligible(server: Dict) -> bool:
     return (
@@ -90,7 +91,6 @@ def security_label(server: Dict) -> str:
 def brand_raw_config(raw: str, protocol: str) -> str:
     """Rebrand a config while keeping literal #@xbroute for URI protocols."""
     if protocol == "vmess":
-        # VMess keeps its display name inside the Base64 JSON payload as `ps`.
         return rename_raw_config(raw, protocol, BRAND_NAME)
 
     base = raw.split("#", 1)[0]
@@ -120,7 +120,7 @@ def build_message(server: Dict) -> str:
         f"🔹 پروتکل: {protocol_text}",
         security_label(server),
         f"🔌 شبکه: {transport_text}",
-        f"⚡ پینگ: {latency_text}",
+        f"⚡ تأخیر تست: {latency_text}",
         "",
         branded_config,
         "",
@@ -136,7 +136,6 @@ def build_message(server: Dict) -> str:
 
 
 def publishable(server: Dict) -> bool:
-    """Return True only for configs that can actually fit in one Telegram message."""
     if not eligible(server):
         return False
     try:
@@ -146,20 +145,121 @@ def publishable(server: Dict) -> bool:
     return True
 
 
-def load_state() -> Tuple[Set[str], List[str], float]:
+def _is_ip(value: str) -> bool:
+    if not value:
+        return False
+    try:
+        ipaddress.ip_address(value.strip("[]"))
+        return True
+    except ValueError:
+        return False
+
+
+def _b64_json(payload: str) -> Dict | None:
+    try:
+        payload = payload.split("#", 1)[0].strip()
+        padded = payload + "=" * (-len(payload) % 4)
+        decoded = base64.urlsafe_b64decode(padded.encode("utf-8"))
+        data = json.loads(decoded.decode("utf-8"))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def telegram_fingerprint(server: Dict) -> str:
+    """Return a stable Telegram-level identity for a config.
+
+    Collector IDs intentionally include address/IP. For CDN-front configs, multiple
+    Cloudflare/front IPs with the same credentials + Host/SNI + query parameters are
+    effectively the same configuration for a Telegram feed, so the front IP is
+    ignored only in that narrow case.
+    """
+    protocol = str(server.get("protocol") or "").lower()
+    raw = str(server.get("raw") or "").strip()
+
+    canonical = raw.split("#", 1)[0]
+
+    if protocol == "vmess" and raw.startswith("vmess://"):
+        data = _b64_json(raw[len("vmess://"):])
+        if data is not None:
+            data = dict(data)
+            data.pop("ps", None)
+
+            address = str(data.get("add") or "")
+            host = str(data.get("host") or "")
+            sni = str(data.get("sni") or "")
+            if _is_ip(address) and (host or sni):
+                data["add"] = "<cdn-front>"
+
+            canonical = json.dumps(
+                data,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+
+    elif protocol in CDN_AWARE_PROTOCOLS and "://" in raw:
+        try:
+            parsed = urlsplit(raw.split("#", 1)[0])
+            query_pairs = sorted(
+                (str(k).lower(), str(v))
+                for k, v in parse_qsl(parsed.query, keep_blank_values=True)
+            )
+            query_map = {}
+            for key, value in query_pairs:
+                query_map.setdefault(key, []).append(value)
+
+            host_hint = any(
+                value
+                for key in ("host", "sni", "peer", "servername")
+                for value in query_map.get(key, [])
+            )
+
+            address = parsed.hostname or ""
+            address_key = "<cdn-front>" if _is_ip(address) and host_hint else address.lower()
+            username = unquote(parsed.username or "")
+            password = unquote(parsed.password or "")
+            port = parsed.port or 0
+
+            canonical = json.dumps(
+                {
+                    "scheme": parsed.scheme.lower(),
+                    "username": username,
+                    "password": password,
+                    "address": address_key,
+                    "port": port,
+                    "query": query_pairs,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        except Exception:
+            canonical = raw.split("#", 1)[0]
+
+    digest = hashlib.sha256(f"{protocol}|{canonical}".encode("utf-8")).hexdigest()
+    return digest[:24]
+
+
+def load_state() -> Tuple[Set[str], Set[str], List[str], float]:
     raw_state = load_json(
         STATE_PATH,
-        {"sent": [], "queue": [], "next_send_after": 0},
+        {
+            "sent": [],
+            "sent_fingerprints": [],
+            "queue": [],
+            "next_send_after": 0,
+        },
     )
 
-    # Backward compatibility with the first implementation where state could be
-    # either a plain list or a dict containing only `sent`.
     if isinstance(raw_state, list):
         sent_raw = raw_state
+        fingerprint_raw = []
         queue_raw = []
         next_send_after = 0.0
     elif isinstance(raw_state, dict):
         sent_raw = raw_state.get("sent", [])
+        fingerprint_raw = raw_state.get("sent_fingerprints", [])
         queue_raw = raw_state.get("queue", [])
         try:
             next_send_after = float(raw_state.get("next_send_after", 0) or 0)
@@ -167,10 +267,12 @@ def load_state() -> Tuple[Set[str], List[str], float]:
             next_send_after = 0.0
     else:
         sent_raw = []
+        fingerprint_raw = []
         queue_raw = []
         next_send_after = 0.0
 
     sent_ids = {str(item) for item in sent_raw if item}
+    sent_fingerprints = {str(item) for item in fingerprint_raw if item}
 
     queue: List[str] = []
     seen: Set[str] = set()
@@ -181,31 +283,49 @@ def load_state() -> Tuple[Set[str], List[str], float]:
         seen.add(server_id)
         queue.append(server_id)
 
-    return sent_ids, queue, next_send_after
+    return sent_ids, sent_fingerprints, queue, next_send_after
 
 
-def save_state(sent_ids: Set[str], queue: List[str], next_send_after: float) -> None:
+def save_state(
+    sent_ids: Set[str],
+    sent_fingerprints: Set[str],
+    queue: List[str],
+    next_send_after: float,
+) -> None:
     save_json(
         STATE_PATH,
         {
             "sent": sorted(sent_ids),
+            "sent_fingerprints": sorted(sent_fingerprints),
             "queue": queue,
             "next_send_after": int(next_send_after),
         },
     )
 
 
+def backfill_sent_fingerprints(
+    servers: List[Dict],
+    sent_ids: Set[str],
+    sent_fingerprints: Set[str],
+) -> int:
+    added = 0
+    for server in servers:
+        server_id = str(server.get("id") or "")
+        if server_id and server_id in sent_ids and server.get("raw"):
+            fingerprint = telegram_fingerprint(server)
+            if fingerprint not in sent_fingerprints:
+                sent_fingerprints.add(fingerprint)
+                added += 1
+    return added
+
+
 def sync_queue(
     servers: List[Dict],
     sent_ids: Set[str],
+    sent_fingerprints: Set[str],
     queue: List[str],
-) -> Tuple[Dict[str, Dict], List[str], int, int]:
-    """Reconcile the persistent queue with the latest validated online snapshot.
-
-    Existing queue order is preserved. Entries that are no longer online or cannot
-    fit in one Telegram message are removed. Newly discovered online configs are
-    appended at the end.
-    """
+) -> Tuple[Dict[str, Dict], List[str], int, int, int]:
+    """Reconcile queue with latest online snapshot and Telegram-level dedupe."""
     online_by_id: Dict[str, Dict] = {}
     ordered_online_ids: List[str] = []
 
@@ -219,37 +339,56 @@ def sync_queue(
 
     clean_queue: List[str] = []
     queued_ids: Set[str] = set()
+    queued_fingerprints: Set[str] = set()
     removed_stale = 0
+    removed_duplicate = 0
 
     for server_id in queue:
         if server_id in sent_ids:
             continue
-        if server_id not in online_by_id:
+
+        server = online_by_id.get(server_id)
+        if server is None:
             removed_stale += 1
             continue
+
+        fingerprint = telegram_fingerprint(server)
+        if fingerprint in sent_fingerprints or fingerprint in queued_fingerprints:
+            removed_duplicate += 1
+            continue
+
         if server_id in queued_ids:
             continue
+
         clean_queue.append(server_id)
         queued_ids.add(server_id)
+        queued_fingerprints.add(fingerprint)
 
     added_new = 0
     for server_id in ordered_online_ids:
         if server_id in sent_ids or server_id in queued_ids:
             continue
+
+        server = online_by_id[server_id]
+        fingerprint = telegram_fingerprint(server)
+        if fingerprint in sent_fingerprints or fingerprint in queued_fingerprints:
+            continue
+
         clean_queue.append(server_id)
         queued_ids.add(server_id)
+        queued_fingerprints.add(fingerprint)
         added_new += 1
 
-    return online_by_id, clean_queue, added_new, removed_stale
+    return (
+        online_by_id,
+        clean_queue,
+        added_new,
+        removed_stale,
+        removed_duplicate,
+    )
 
 
 def load_latest_servers_from_main() -> List[Dict]:
-    """Fetch main and read its newest data/servers.json without changing checkout.
-
-    The publisher may run for several minutes while the collector updates main every
-    five minutes. Reading FETCH_HEAD immediately after fetching main prevents a
-    config that became offline mid-run from being published from an old snapshot.
-    """
     try:
         subprocess.run(
             ["git", "fetch", "origin", "main", "--quiet"],
@@ -359,21 +498,26 @@ def main() -> int:
         print("[telegram] servers.json is not a list.", file=sys.stderr)
         return 1
 
-    sent_ids, queue, next_send_after = load_state()
-    _, queue, added_new, removed_stale = sync_queue(
+    sent_ids, sent_fingerprints, queue, next_send_after = load_state()
+    backfilled = backfill_sent_fingerprints(
         servers,
         sent_ids,
+        sent_fingerprints,
+    )
+
+    _, queue, added_new, removed_stale, removed_duplicate = sync_queue(
+        servers,
+        sent_ids,
+        sent_fingerprints,
         queue,
     )
 
-    # Persist queue reconciliation even when the bot token has not been configured
-    # yet. When the token is added later, publishing starts from a clean queue of
-    # configs that are still online at that time.
-    save_state(sent_ids, queue, next_send_after)
+    save_state(sent_ids, sent_fingerprints, queue, next_send_after)
     print(
         f"[telegram] queue synced: {len(queue)} pending, "
         f"{added_new} added, {removed_stale} stale removed, "
-        f"{len(sent_ids)} already sent."
+        f"{removed_duplicate} semantic duplicates removed, "
+        f"{len(sent_ids)} already sent, {backfilled} fingerprints backfilled."
     )
 
     if not token or not chat_id or not topic_raw:
@@ -400,34 +544,37 @@ def main() -> int:
         if not enough_run_budget(next_send_after, deadline_monotonic):
             print(
                 f"[telegram] handing off with {len(queue)} queued; "
-                "next scheduled run will continue."
+                "next workflow run will continue."
             )
             break
 
         server_id = queue.pop(0)
 
         if server_id in sent_ids:
-            save_state(sent_ids, queue, next_send_after)
+            save_state(sent_ids, sent_fingerprints, queue, next_send_after)
             continue
 
-        # Respect the persisted 30-90 second window first, then refresh main so the
-        # online check is as close as possible to the actual Telegram send.
         wait_until_next_slot(next_send_after)
 
         try:
             latest_servers = load_latest_servers_from_main()
         except Exception as exc:
             queue.insert(0, server_id)
-            save_state(sent_ids, queue, next_send_after)
+            save_state(sent_ids, sent_fingerprints, queue, next_send_after)
             print(f"[telegram] latest snapshot check failed: {exc}", file=sys.stderr)
             return 1
 
         server = find_publishable_server(latest_servers, server_id)
         if server is None:
-            # It was online when queued but is not online/publishable anymore. Drop
-            # it for now; if it comes back online later, sync_queue will append it.
-            save_state(sent_ids, queue, next_send_after)
+            save_state(sent_ids, sent_fingerprints, queue, next_send_after)
             print(f"[telegram] skipped stale/offline config {server_id}")
+            continue
+
+        fingerprint = telegram_fingerprint(server)
+        if fingerprint in sent_fingerprints:
+            sent_ids.add(server_id)
+            save_state(sent_ids, sent_fingerprints, queue, next_send_after)
+            print(f"[telegram] skipped semantic duplicate {server_id}")
             continue
 
         try:
@@ -439,7 +586,7 @@ def main() -> int:
                 next_send_after,
                 time.time() + max(exc.retry_after, 1) + 1,
             )
-            save_state(sent_ids, queue, next_send_after)
+            save_state(sent_ids, sent_fingerprints, queue, next_send_after)
             print(
                 f"[telegram] rate limited; retry after {exc.retry_after}s. "
                 "State preserved for the next run.",
@@ -447,22 +594,18 @@ def main() -> int:
             )
             return 0
         except Exception as exc:
-            # Put the failed item back at the front so a transient error does not
-            # lose or reorder the queue.
             queue.insert(0, server_id)
-            save_state(sent_ids, queue, next_send_after)
+            save_state(sent_ids, sent_fingerprints, queue, next_send_after)
             print(f"[telegram] failed for {server_id}: {exc}", file=sys.stderr)
             return 1
 
         sent_ids.add(server_id)
+        sent_fingerprints.add(fingerprint)
         published += 1
 
-        # Pick the next allowed send time immediately after a successful message.
-        # Keeping this timestamp in persistent state also enforces the minimum delay
-        # when a new GitHub Actions run starts right after the previous one.
         delay = random.randint(MIN_SEND_DELAY_SECONDS, MAX_SEND_DELAY_SECONDS)
         next_send_after = time.time() + delay
-        save_state(sent_ids, queue, next_send_after)
+        save_state(sent_ids, sent_fingerprints, queue, next_send_after)
 
         print(
             f"[telegram] published {server_id}; next delay {delay}s; "
