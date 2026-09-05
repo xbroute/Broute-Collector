@@ -12,6 +12,7 @@ on:
       - main
     paths:
       - "scripts/telegram_bot_control.py"
+      - "scripts/telegram_bot_control_safe.py"
       - "scripts/telegram_publisher_controlled.py"
       - ".github/workflows/telegram-bot-control.yml"
 
@@ -68,7 +69,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
           TELEGRAM_CONTROL_CHAT_ID: "-1004469276021"
-        run: python scripts/telegram_bot_control.py
+        run: python scripts/telegram_bot_control_safe.py
 
       - name: Active publisher owns bot polling
         if: github.event_name != 'push' && github.event_name != 'workflow_dispatch' && steps.publisher_activity.outputs.active != '0'
