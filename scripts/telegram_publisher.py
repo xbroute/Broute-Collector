@@ -16,7 +16,6 @@ import json
 import os
 import sys
 import time
-from pathlib import Path
 from typing import Dict, List, Set
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -26,7 +25,14 @@ from common import country_flag, load_json, rename_raw_config, save_json
 SERVERS_PATH = "data/servers.json"
 STATE_PATH = "data/telegram_state.json"
 BRAND_NAME = "@xbroute"
-SEND_DELAY_SECONDS = 0.12
+
+# Telegram's official bot FAQ recommends staying below 20 messages/minute in a
+# group. 3.2 seconds keeps us just under that ceiling, and the per-run cap keeps
+# a 5-minute GitHub Actions schedule from piling up overlapping jobs.
+SEND_DELAY_SECONDS = 3.2
+MAX_MESSAGES_PER_RUN = 80
+MAX_TELEGRAM_TEXT_LENGTH = 4096
+MAX_RATE_LIMIT_RETRIES = 3
 
 PROTOCOL_LABELS = {
     "vless": "VLESS",
@@ -76,7 +82,7 @@ def security_label(server: Dict) -> str:
 def build_message(server: Dict) -> str:
     flag = country_flag(str(server.get("country") or ""))
     country = str(server.get("country_name") or "Unknown")
-    country_text = f"{flag} {country}".strip()
+    country_prefix = flag or "🌍"
 
     protocol = str(server.get("protocol") or "Unknown").lower()
     protocol_text = PROTOCOL_LABELS.get(protocol, protocol.upper())
@@ -93,10 +99,10 @@ def build_message(server: Dict) -> str:
         BRAND_NAME,
     )
 
-    return "\n".join([
+    message = "\n".join([
         "🟢 کانفیگ رایگان",
         "",
-        f"🌍 کشور: {country_text}",
+        f"{country_prefix} کشور: {country}",
         f"🔹 پروتکل: {protocol_text}",
         security_label(server),
         f"🔌 شبکه: {transport_text}",
@@ -106,6 +112,13 @@ def build_message(server: Dict) -> str:
         "",
         f"🔗 {BRAND_NAME}",
     ])
+
+    if len(message) > MAX_TELEGRAM_TEXT_LENGTH:
+        raise ValueError(
+            f"message exceeds Telegram's {MAX_TELEGRAM_TEXT_LENGTH}-character limit"
+        )
+
+    return message
 
 
 def load_sent_ids() -> Set[str]:
@@ -123,31 +136,66 @@ def save_sent_ids(sent_ids: Set[str]) -> None:
     save_json(STATE_PATH, {"sent": sorted(sent_ids)})
 
 
-def send_message(token: str, chat_id: str, topic_id: int, text: str) -> None:
+def _telegram_request(token: str, payload: Dict) -> Dict:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = json.dumps({
-        "chat_id": chat_id,
-        "message_thread_id": topic_id,
-        "text": text,
-        "disable_web_page_preview": True,
-    }).encode("utf-8")
     request = Request(
         url,
-        data=payload,
+        data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+
     try:
         with urlopen(request, timeout=30) as response:
-            result = json.loads(response.read().decode("utf-8"))
+            return json.loads(response.read().decode("utf-8"))
     except HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            data = {}
+
+        retry_after = (
+            data.get("parameters", {}).get("retry_after")
+            if isinstance(data, dict)
+            else None
+        )
+        if exc.code == 429 and retry_after is not None:
+            raise RateLimited(int(retry_after)) from exc
+
         raise RuntimeError(f"Telegram HTTP {exc.code}: {body}") from exc
     except URLError as exc:
         raise RuntimeError(f"Telegram connection error: {exc}") from exc
 
-    if not result.get("ok"):
-        raise RuntimeError(f"Telegram API error: {result}")
+
+class RateLimited(RuntimeError):
+    def __init__(self, retry_after: int):
+        super().__init__(f"Telegram rate limited; retry after {retry_after}s")
+        self.retry_after = retry_after
+
+
+def send_message(token: str, chat_id: str, topic_id: int, text: str) -> None:
+    payload = {
+        "chat_id": chat_id,
+        "message_thread_id": topic_id,
+        "text": text,
+        "link_preview_options": {"is_disabled": True},
+    }
+
+    for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+        try:
+            result = _telegram_request(token, payload)
+        except RateLimited as exc:
+            if attempt >= MAX_RATE_LIMIT_RETRIES:
+                raise
+            sleep_for = max(exc.retry_after, 1) + 1
+            print(f"[telegram] rate limited; sleeping {sleep_for}s before retry")
+            time.sleep(sleep_for)
+            continue
+
+        if not result.get("ok"):
+            raise RuntimeError(f"Telegram API error: {result}")
+        return
 
 
 def main() -> int:
@@ -174,20 +222,27 @@ def main() -> int:
         return 1
 
     sent_ids = load_sent_ids()
-    pending = [server for server in servers if eligible(server) and str(server["id"]) not in sent_ids]
+    pending = [
+        server
+        for server in servers
+        if eligible(server) and str(server["id"]) not in sent_ids
+    ]
+    pending = pending[:MAX_MESSAGES_PER_RUN]
 
     if not pending:
         print("[telegram] no new online configs to publish.")
         return 0
 
     published = 0
-    for server in pending:
+    for index, server in enumerate(pending):
         server_id = str(server["id"])
         try:
-            send_message(token, chat_id, topic_id, build_message(server))
+            message = build_message(server)
+            send_message(token, chat_id, topic_id, message)
         except Exception as exc:
-            # Persist every successful send immediately. This prevents duplicates if a
-            # later message fails and the GitHub Actions job is retried.
+            # Successful sends are persisted immediately in the local state file.
+            # The workflow keeps going after this step so the state can still be
+            # committed, preventing duplicate sends on the next scheduled run.
             save_sent_ids(sent_ids)
             print(f"[telegram] failed for {server_id}: {exc}", file=sys.stderr)
             return 1
@@ -196,7 +251,9 @@ def main() -> int:
         save_sent_ids(sent_ids)
         published += 1
         print(f"[telegram] published {server_id}")
-        time.sleep(SEND_DELAY_SECONDS)
+
+        if index < len(pending) - 1:
+            time.sleep(SEND_DELAY_SECONDS)
 
     print(f"[telegram] done. {published} new configs published.")
     return 0
