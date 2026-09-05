@@ -1,0 +1,43 @@
+name: Telegram Bot Control
+
+on:
+  schedule:
+    - cron: "1,6,11,16,21,26,31,36,41,46,51,56 * * * *"
+  workflow_dispatch: {}
+  push:
+    branches:
+      - main
+    paths:
+      - "scripts/telegram_bot_control.py"
+      - ".github/workflows/telegram-bot-control.yml"
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: "telegram-bot-control"
+  cancel-in-progress: false
+
+jobs:
+  poll:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Process Telegram publisher commands
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TELEGRAM_CONTROL_CHAT_ID: "-1004469276021"
+        run: python scripts/telegram_bot_control.py
