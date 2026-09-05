@@ -1,12 +1,7 @@
 name: Publish Telegram Configs
 
 on:
-  workflow_run:
-    workflows: ["Update Subscription"]
-    types: [completed]
   workflow_dispatch: {}
-  schedule:
-    - cron: "7,17,27,37,47,57 * * * *"
   push:
     branches:
       - main
@@ -24,7 +19,6 @@ concurrency:
 
 jobs:
   publish:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -126,9 +120,8 @@ jobs:
             git commit -m "chore: final Telegram state checkpoint [automated]"
           fi
 
-          # Even when there are no uncommitted changes, the publisher may have a
-          # local checkpoint commit whose network push failed. Always try to push
-          # local HEAD so a successfully sent message is not forgotten.
+          # The publisher already checkpoints after every send. This final push
+          # is a second safety net in case the last network push was transient.
           for attempt in 1 2 3 4 5; do
             if git push origin HEAD:telegram-state; then
               exit 0
@@ -154,7 +147,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Backlog remains; dispatching the next publisher run."
+          echo "Backlog remains; dispatching exactly one successor publisher run."
           for attempt in 1 2 3 4 5; do
             if curl --fail-with-body --silent --show-error \
               --request POST \
@@ -170,10 +163,10 @@ jobs:
             echo "Publisher dispatch attempt ${attempt} failed; retrying..."
             sleep $((attempt * 3))
           done
-          echo "::warning::Could not self-dispatch after 5 attempts. The 10-minute watchdog schedule will recover the backlog."
+          echo "::warning::Could not self-dispatch after 5 attempts. The external watchdog will recover the backlog."
           exit 0
 
       - name: Warn if Telegram publishing failed
         if: steps.telegram_publish.outcome == 'failure'
         run: |
-          echo "::warning::Telegram publisher failed. Durable checkpoints limit duplicate risk; the watchdog will retry later."
+          echo "::warning::Telegram publisher failed. Durable checkpoints limit duplicate risk; the external watchdog will retry later."
