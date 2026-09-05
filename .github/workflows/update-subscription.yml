@@ -31,9 +31,16 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run collector -> parser -> deduplicator -> validator -> generator
+        run: python scripts/generator.py
+
+      - name: Publish new online configs to Telegram
+        id: telegram_publish
+        continue-on-error: true
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-        run: python scripts/generator.py
+          TELEGRAM_CHAT_ID: "-1004469276021"
+          TELEGRAM_TOPIC_ID: "1944"
+        run: python scripts/telegram_publisher.py
 
       - name: Check for changes
         id: git_check
@@ -52,6 +59,11 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "chore: update subscription data [automated]"
           git push
+
+      - name: Warn if Telegram publishing failed
+        if: steps.telegram_publish.outcome == 'failure'
+        run: |
+          echo "::warning::Telegram publishing failed. Successful sends were persisted; unsent configs will be retried on the next run."
 
   deploy-pages:
     needs: update
