@@ -76,7 +76,7 @@ def run_validation(records: List[Dict], previous_servers: Dict[str, Dict]) -> Li
                 country_name = result.get("country_name") or "Unknown"
                 display_name = f"{flag} {country_name}".strip() if flag else country_name
             else:
-                display_name = "یام‌یام پروکسی | @YamYamProxy"
+                display_name = "@xbroute"
             result["name"] = display_name
             result["raw"] = rename_raw_config(result.get("raw", ""), result.get("protocol", ""), display_name)
             validated.append(result)
@@ -155,7 +155,6 @@ def main() -> None:
     records = build_server_records(deduped_items, previous_servers)
     validated_records = run_validation(records, previous_servers)
 
-    # حذف فیلد raw از خروجی JSON عمومی برای پاکیزگی؛ raw فقط برای تولید sub.txt استفاده می‌شود
     save_json(SERVERS_PATH, validated_records)
 
     write_output_files(validated_records)
