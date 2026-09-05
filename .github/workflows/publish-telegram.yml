@@ -14,6 +14,7 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: "telegram-publisher"
@@ -79,6 +80,23 @@ jobs:
 
           echo "Failed to persist Telegram state after 3 attempts." >&2
           exit 1
+
+      - name: Check Telegram backlog
+        id: telegram_backlog
+        if: steps.telegram_publish.outcome == 'success'
+        working-directory: state
+        run: |
+          pending=$(python -c 'import json; data=json.load(open("telegram_state.json", encoding="utf-8")); print(len(data.get("queue", [])))')
+          echo "pending=${pending}" >> "$GITHUB_OUTPUT"
+          echo "Pending Telegram configs: ${pending}"
+
+      - name: Continue Telegram backlog
+        if: steps.telegram_publish.outcome == 'success' && steps.telegram_backlog.outputs.pending != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Backlog remains; dispatching the next publisher run."
+          gh workflow run publish-telegram.yml --ref main
 
       - name: Warn if Telegram publishing failed
         if: steps.telegram_publish.outcome == 'failure'
