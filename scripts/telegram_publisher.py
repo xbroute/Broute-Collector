@@ -240,21 +240,19 @@ def load_latest_servers_from_main() -> List[Dict]:
     """Fetch main and read its newest data/servers.json without changing checkout.
 
     The publisher may run for several minutes while the collector updates main every
-    five minutes. Re-reading origin/main immediately before each send prevents a
+    five minutes. Reading FETCH_HEAD immediately after fetching main prevents a
     config that became offline mid-run from being published from an old snapshot.
     """
     try:
-        fetch = subprocess.run(
+        subprocess.run(
             ["git", "fetch", "origin", "main", "--quiet"],
             check=True,
             capture_output=True,
             text=True,
             timeout=GIT_REFRESH_TIMEOUT_SECONDS,
         )
-        _ = fetch  # keep the completed process available for debugging if needed
-
         shown = subprocess.run(
-            ["git", "show", "origin/main:data/servers.json"],
+            ["git", "show", "FETCH_HEAD:data/servers.json"],
             check=True,
             capture_output=True,
             text=True,
