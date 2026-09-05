@@ -13,7 +13,7 @@ import os
 import sys
 import time
 
-import telegram_bot_control as bot_control
+import telegram_bot_control_safe as bot_control
 import telegram_publisher as publisher
 from telegram_publisher_control import remote_enabled
 
@@ -97,13 +97,10 @@ def main() -> int:
     original_send_message = publisher.send_message
 
     def controlled_live_validate(server):
-        # Poll immediately before network validation. This lets a pending OFF
-        # command stop the candidate before any new send path begins.
         ensure_enabled(force_bot_poll=True)
         return original_live_validate(server)
 
     def controlled_send_message(token, chat_id, topic_id, text):
-        # A second check closes the small gap between validation and send.
         ensure_enabled(force_bot_poll=True)
         return original_send_message(token, chat_id, topic_id, text)
 
@@ -112,7 +109,6 @@ def main() -> int:
     publisher.send_message = controlled_send_message
 
     try:
-        # On startup, consume pending bot commands before touching the queue.
         ensure_enabled(force_bot_poll=True)
         return publisher.main()
     except PublishingDisabled:
