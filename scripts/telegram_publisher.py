@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import random
+import subprocess
 import sys
 import time
 from typing import Dict, List, Set, Tuple
@@ -34,9 +35,11 @@ BRAND_NAME = "@xbroute"
 
 MIN_SEND_DELAY_SECONDS = 30
 MAX_SEND_DELAY_SECONDS = 90
-MAX_MESSAGES_PER_RUN = 10
+# Five messages keeps the worst-case runtime comfortably below the 20-minute
+# GitHub Actions timeout even when every random delay lands near 90 seconds.
+MAX_MESSAGES_PER_RUN = 5
 MAX_TELEGRAM_TEXT_LENGTH = 4096
-MAX_RATE_LIMIT_RETRIES = 3
+GIT_REFRESH_TIMEOUT_SECONDS = 30
 
 PROTOCOL_LABELS = {
     "vless": "VLESS",
@@ -125,6 +128,17 @@ def build_message(server: Dict) -> str:
     return message
 
 
+def publishable(server: Dict) -> bool:
+    """Return True only for configs that can actually fit in one Telegram message."""
+    if not eligible(server):
+        return False
+    try:
+        build_message(server)
+    except ValueError:
+        return False
+    return True
+
+
 def load_state() -> Tuple[Set[str], List[str], float]:
     raw_state = load_json(
         STATE_PATH,
@@ -181,14 +195,15 @@ def sync_queue(
 ) -> Tuple[Dict[str, Dict], List[str], int, int]:
     """Reconcile the persistent queue with the latest validated online snapshot.
 
-    Existing queue order is preserved. Entries that are no longer online are
-    removed. Newly discovered online configs are appended at the end.
+    Existing queue order is preserved. Entries that are no longer online or cannot
+    fit in one Telegram message are removed. Newly discovered online configs are
+    appended at the end.
     """
     online_by_id: Dict[str, Dict] = {}
     ordered_online_ids: List[str] = []
 
     for server in servers:
-        if not eligible(server):
+        if not publishable(server):
             continue
         server_id = str(server["id"])
         if server_id not in online_by_id:
@@ -219,6 +234,39 @@ def sync_queue(
         added_new += 1
 
     return online_by_id, clean_queue, added_new, removed_stale
+
+
+def load_latest_servers_from_main() -> List[Dict]:
+    """Fetch main and read its newest data/servers.json without changing checkout.
+
+    The publisher may run for several minutes while the collector updates main every
+    five minutes. Re-reading origin/main immediately before each send prevents a
+    config that became offline mid-run from being published from an old snapshot.
+    """
+    try:
+        fetch = subprocess.run(
+            ["git", "fetch", "origin", "main", "--quiet"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=GIT_REFRESH_TIMEOUT_SECONDS,
+        )
+        _ = fetch  # keep the completed process available for debugging if needed
+
+        shown = subprocess.run(
+            ["git", "show", "origin/main:data/servers.json"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=GIT_REFRESH_TIMEOUT_SECONDS,
+        )
+        servers = json.loads(shown.stdout)
+    except (subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"could not refresh latest main servers.json: {exc}") from exc
+
+    if not isinstance(servers, list):
+        raise RuntimeError("latest main data/servers.json is not a list")
+    return servers
 
 
 def _telegram_request(token: str, payload: Dict) -> Dict:
@@ -267,20 +315,9 @@ def send_message(token: str, chat_id: str, topic_id: int, text: str) -> None:
         "link_preview_options": {"is_disabled": True},
     }
 
-    for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
-        try:
-            result = _telegram_request(token, payload)
-        except RateLimited as exc:
-            if attempt >= MAX_RATE_LIMIT_RETRIES:
-                raise
-            sleep_for = max(exc.retry_after, 1) + 1
-            print(f"[telegram] rate limited; sleeping {sleep_for}s before retry")
-            time.sleep(sleep_for)
-            continue
-
-        if not result.get("ok"):
-            raise RuntimeError(f"Telegram API error: {result}")
-        return
+    result = _telegram_request(token, payload)
+    if not result.get("ok"):
+        raise RuntimeError(f"Telegram API error: {result}")
 
 
 def wait_until_next_slot(next_send_after: float) -> None:
@@ -291,6 +328,13 @@ def wait_until_next_slot(next_send_after: float) -> None:
     sleep_for = next_send_after - now
     print(f"[telegram] pacing delay: sleeping {sleep_for:.1f}s")
     time.sleep(sleep_for)
+
+
+def find_publishable_server(servers: List[Dict], server_id: str) -> Dict | None:
+    for server in servers:
+        if str(server.get("id") or "") == server_id and publishable(server):
+            return server
+    return None
 
 
 def main() -> int:
@@ -304,7 +348,7 @@ def main() -> int:
         return 1
 
     sent_ids, queue, next_send_after = load_state()
-    online_by_id, queue, added_new, removed_stale = sync_queue(
+    _, queue, added_new, removed_stale = sync_queue(
         servers,
         sent_ids,
         queue,
@@ -340,21 +384,50 @@ def main() -> int:
     published = 0
     while queue and published < MAX_MESSAGES_PER_RUN:
         server_id = queue.pop(0)
-        server = online_by_id.get(server_id)
 
-        # This can happen only if the queue was externally edited between sync and
-        # publishing. Drop it safely rather than blocking the queue.
-        if server is None or server_id in sent_ids:
+        if server_id in sent_ids:
             save_state(sent_ids, queue, next_send_after)
             continue
 
+        # Respect the persisted 30-90 second window first, then refresh main so the
+        # online check is as close as possible to the actual Telegram send.
         wait_until_next_slot(next_send_after)
+
+        try:
+            latest_servers = load_latest_servers_from_main()
+        except Exception as exc:
+            queue.insert(0, server_id)
+            save_state(sent_ids, queue, next_send_after)
+            print(f"[telegram] latest snapshot check failed: {exc}", file=sys.stderr)
+            return 1
+
+        server = find_publishable_server(latest_servers, server_id)
+        if server is None:
+            # It was online when queued but is not online/publishable anymore. Drop
+            # it for now; if it comes back online later, sync_queue will append it.
+            save_state(sent_ids, queue, next_send_after)
+            print(f"[telegram] skipped stale/offline config {server_id}")
+            continue
 
         try:
             message = build_message(server)
             send_message(token, chat_id, topic_id, message)
+        except RateLimited as exc:
+            queue.insert(0, server_id)
+            next_send_after = max(
+                next_send_after,
+                time.time() + max(exc.retry_after, 1) + 1,
+            )
+            save_state(sent_ids, queue, next_send_after)
+            print(
+                f"[telegram] rate limited; retry after {exc.retry_after}s. "
+                "State preserved for the next run.",
+                file=sys.stderr,
+            )
+            return 0
         except Exception as exc:
-            # Put the failed item back at the front so it is retried first next run.
+            # Put the failed item back at the front so a transient error does not
+            # lose or reorder the queue.
             queue.insert(0, server_id)
             save_state(sent_ids, queue, next_send_after)
             print(f"[telegram] failed for {server_id}: {exc}", file=sys.stderr)
