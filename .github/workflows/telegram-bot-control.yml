@@ -49,6 +49,24 @@ jobs:
         if: github.event_name != 'schedule'
         run: python -m unittest tests.test_telegram_bot_control -v
 
+      - name: Verify Telegram admin authorization path
+        if: github.event_name != 'schedule'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TELEGRAM_CONTROL_CHAT_ID: "-1004469276021"
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "scripts")
+          import telegram_bot_control as control
+
+          admins = control.current_admin_ids()
+          if not admins:
+              raise SystemExit("Telegram returned no human administrators for the target group")
+          print(f"Telegram admin authorization preflight passed: {len(admins)} human admin(s) visible")
+          PY
+
       - name: Process Telegram publisher commands
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
