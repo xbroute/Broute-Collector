@@ -75,12 +75,12 @@ jobs:
           print(f"Collector age: {age}s; stale={stale}")
           PY
 
-      - name: Recover stale collector
+      - name: Refresh stale collector in background
         if: steps.collector_freshness.outputs.stale == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "::warning::Collector data is stale; Telegram publishing is paused until a fresh validation run completes."
+          echo "::warning::Collector snapshot is stale. A refresh is being requested, but Telegram publishing will continue with per-config live validation."
           for attempt in 1 2 3; do
             if curl --fail-with-body --silent --show-error \
               --request POST \
@@ -90,18 +90,17 @@ jobs:
               --header "Content-Type: application/json" \
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/update-subscription.yml/dispatches" \
               --data '{"ref":"main"}'; then
-              echo "Fresh collector run dispatched."
+              echo "Fresh collector run dispatched; publisher continues independently."
               exit 0
             fi
             echo "Collector dispatch attempt ${attempt} failed; retrying..."
             sleep $((attempt * 5))
           done
-          echo "::warning::Could not dispatch the collector after 3 attempts. The publisher watchdog will retry later."
+          echo "::warning::Collector refresh dispatch failed after 3 attempts. Live validation still protects Telegram sends."
           exit 0
 
-      - name: Publish queued online configs
+      - name: Publish queued live configs
         id: telegram_publish
-        if: steps.collector_freshness.outputs.stale == 'false'
         continue-on-error: true
         working-directory: app
         env:
@@ -109,31 +108,36 @@ jobs:
           TELEGRAM_CHAT_ID: "-1004469276021"
           TELEGRAM_TOPIC_ID: "1944"
           TELEGRAM_STATE_PATH: "../state/telegram_state.json"
+          TELEGRAM_RUN_BUDGET_SECONDS: ${{ github.event_name == 'push' && '150' || '540' }}
+          TELEGRAM_LIVE_CHECK_RETRIES: "2"
+          TELEGRAM_STATE_PUSH_RETRIES: "5"
+          TELEGRAM_REQUEST_RETRIES: "4"
         run: python scripts/telegram_publisher.py
 
-      - name: Commit Telegram queue state
+      - name: Final Telegram state safety push
         if: steps.telegram_publish.outcome != 'skipped'
         working-directory: state
         run: |
-          git add telegram_state.json
-          if git diff --cached --quiet; then
-            echo "No Telegram state changes to commit."
-            exit 0
-          fi
-
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git commit -m "chore: update Telegram publisher state [automated]"
 
-          for attempt in 1 2 3; do
+          git add telegram_state.json
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: final Telegram state checkpoint [automated]"
+          fi
+
+          # Even when there are no uncommitted changes, the publisher may have a
+          # local checkpoint commit whose network push failed. Always try to push
+          # local HEAD so a successfully sent message is not forgotten.
+          for attempt in 1 2 3 4 5; do
             if git push origin HEAD:telegram-state; then
               exit 0
             fi
-            echo "State push attempt ${attempt} failed; retrying in 5 seconds..."
-            sleep 5
+            echo "Final state push attempt ${attempt} failed; retrying..."
+            sleep $((attempt * 3))
           done
 
-          echo "Failed to persist Telegram state after 3 attempts." >&2
+          echo "Failed to persist final Telegram state after 5 attempts." >&2
           exit 1
 
       - name: Check Telegram backlog
@@ -151,7 +155,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "Backlog remains; dispatching the next publisher run."
-          for attempt in 1 2 3; do
+          for attempt in 1 2 3 4 5; do
             if curl --fail-with-body --silent --show-error \
               --request POST \
               --header "Accept: application/vnd.github+json" \
@@ -164,12 +168,12 @@ jobs:
               exit 0
             fi
             echo "Publisher dispatch attempt ${attempt} failed; retrying..."
-            sleep $((attempt * 5))
+            sleep $((attempt * 3))
           done
-          echo "::warning::Could not self-dispatch after 3 attempts. The 10-minute watchdog schedule will recover the backlog."
+          echo "::warning::Could not self-dispatch after 5 attempts. The 10-minute watchdog schedule will recover the backlog."
           exit 0
 
       - name: Warn if Telegram publishing failed
         if: steps.telegram_publish.outcome == 'failure'
         run: |
-          echo "::warning::Telegram publishing failed. State was preserved and the watchdog will retry later."
+          echo "::warning::Telegram publisher failed. Durable checkpoints limit duplicate risk; the watchdog will retry later."
