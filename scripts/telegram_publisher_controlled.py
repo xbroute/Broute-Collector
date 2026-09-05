@@ -78,7 +78,17 @@ def main() -> int:
         # Keep presentation decoration at the last possible point so the
         # publisher's queue/dedupe/state logic continues to operate on the exact
         # config and Telegram's visible 4096-character limit.
-        return original_telegram_request_once(token, decorate_send_payload(payload))
+        source_text = payload.get("text")
+        config_chars = len(getattr(source_text, "copy_text", ""))
+        decorated = decorate_send_payload(payload)
+        if config_chars:
+            print(
+                "[telegram-copy] preformatted=yes "
+                f"native_copy_button={'yes' if 'reply_markup' in decorated else 'no'} "
+                f"config_chars={config_chars}",
+                flush=True,
+            )
+        return original_telegram_request_once(token, decorated)
 
     publisher.build_message = copyable_build_message
     publisher.wait_until_next_slot = controlled_wait_until_next_slot
