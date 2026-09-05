@@ -59,6 +59,8 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git commit -m "chore: update Telegram publisher state [automated]"
 
+          # Persist state separately from main. Retry transient push failures so a
+          # successful Telegram send is much less likely to be repeated next run.
           for attempt in 1 2 3; do
             if git push origin HEAD:telegram-state; then
               exit 0
