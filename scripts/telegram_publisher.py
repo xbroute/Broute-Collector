@@ -35,9 +35,10 @@ BRAND_NAME = "@xbroute"
 
 MIN_SEND_DELAY_SECONDS = 30
 MAX_SEND_DELAY_SECONDS = 90
-# Five messages keeps the worst-case runtime comfortably below the 20-minute
-# GitHub Actions timeout even when every random delay lands near 90 seconds.
-MAX_MESSAGES_PER_RUN = 5
+# Keep one publisher run alive long enough that the next 5-minute scheduled run is
+# already pending. The reserve lets us hand state back safely before Actions timeout.
+RUN_BUDGET_SECONDS = 9 * 60
+RUN_STOP_RESERVE_SECONDS = 60
 MAX_TELEGRAM_TEXT_LENGTH = 4096
 GIT_REFRESH_TIMEOUT_SECONDS = 30
 
@@ -86,6 +87,16 @@ def security_label(server: Dict) -> str:
     return "⚠️ امنیت: بدون TLS"
 
 
+def brand_raw_config(raw: str, protocol: str) -> str:
+    """Rebrand a config while keeping literal #@xbroute for URI protocols."""
+    if protocol == "vmess":
+        # VMess keeps its display name inside the Base64 JSON payload as `ps`.
+        return rename_raw_config(raw, protocol, BRAND_NAME)
+
+    base = raw.split("#", 1)[0]
+    return f"{base}#{BRAND_NAME}"
+
+
 def build_message(server: Dict) -> str:
     flag = country_flag(str(server.get("country") or ""))
     country = str(server.get("country_name") or "Unknown")
@@ -100,11 +111,7 @@ def build_message(server: Dict) -> str:
     latency = server.get("latency")
     latency_text = f"{latency}ms" if latency is not None else "نامشخص"
 
-    branded_config = rename_raw_config(
-        str(server.get("raw") or ""),
-        protocol,
-        BRAND_NAME,
-    )
+    branded_config = brand_raw_config(str(server.get("raw") or ""), protocol)
 
     message = "\n".join([
         "🟢 کانفیگ رایگان",
@@ -335,6 +342,12 @@ def find_publishable_server(servers: List[Dict], server_id: str) -> Dict | None:
     return None
 
 
+def enough_run_budget(next_send_after: float, deadline_monotonic: float) -> bool:
+    wait_needed = max(0.0, next_send_after - time.time())
+    remaining = deadline_monotonic - time.monotonic()
+    return remaining >= wait_needed + RUN_STOP_RESERVE_SECONDS
+
+
 def main() -> int:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
@@ -380,7 +393,16 @@ def main() -> int:
         return 0
 
     published = 0
-    while queue and published < MAX_MESSAGES_PER_RUN:
+    deadline_monotonic = time.monotonic() + RUN_BUDGET_SECONDS
+
+    while queue:
+        if not enough_run_budget(next_send_after, deadline_monotonic):
+            print(
+                f"[telegram] handing off with {len(queue)} queued; "
+                "next scheduled run will continue."
+            )
+            break
+
         server_id = queue.pop(0)
 
         if server_id in sent_ids:
