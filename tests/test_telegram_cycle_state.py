@@ -135,6 +135,45 @@ class TelegramCycleStateTests(unittest.TestCase):
         self.assertEqual(state["cycle"], 3)
         self.assertEqual(state["queue"], [])
 
+    def test_real_repository_snapshot_refills_after_complete_cycle(self):
+        """Production-shaped integration test; never talks to Telegram/network."""
+        snapshot_path = os.path.join(ROOT, "data", "servers.json")
+        with open(snapshot_path, "r", encoding="utf-8") as f:
+            snapshot = json.load(f)
+
+        publishable = [server for server in snapshot if publisher.is_publishable(server)]
+        if not publishable:
+            self.skipTest("repository snapshot has no publishable configs")
+
+        self.write_servers(snapshot)
+        all_ids = {str(server["id"]) for server in publishable}
+        all_fps = {publisher.telegram_fingerprint(server) for server in publishable}
+        self.write_state(
+            {
+                "sent": sorted(all_ids),
+                "sent_fingerprints": sorted(all_fps),
+                "cycle": 7,
+                "cycle_sent": sorted(all_ids),
+                "cycle_sent_fingerprints": sorted(all_fps),
+                "queue": [],
+                "next_send_after": 0,
+            }
+        )
+
+        adapter = telegram_cycle_state.CycleStateAdapter(publisher)
+        cycle_sent, cycle_fps, queue, next_send = adapter.load_state()
+        self.assertEqual(queue, [])
+        adapter.save_state(cycle_sent, cycle_fps, queue, next_send)
+        state = self.read_state()
+
+        self.assertEqual(state["cycle"], 8)
+        self.assertEqual(state["cycle_sent"], [])
+        self.assertGreater(len(state["queue"]), 0)
+        self.assertTrue(set(state["queue"]).issubset(all_ids))
+        # All-time history is retained; a new cycle is not implemented by
+        # deleting sent history.
+        self.assertTrue(all_ids.issubset(set(state["sent"])))
+
 
 if __name__ == "__main__":
     unittest.main()
