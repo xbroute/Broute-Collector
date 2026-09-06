@@ -1593,6 +1593,7 @@
   ],
   "cycle": 3,
   "cycle_sent": [
+    "528fbd8e37531cde",
     "a663e17e043be699",
     "bbe12f89c812d0e8",
     "de65f9f85b6db9f2"
@@ -1600,10 +1601,10 @@
   "cycle_sent_fingerprints": [
     "4feaed10ae98a43c55a5df6e",
     "6839c1e84b78aaebedde1484",
+    "8694288de5c79b984f1a6373",
     "ae42c69c881ad14cf6f1c3f4"
   ],
   "queue": [
-    "528fbd8e37531cde",
     "346906b9fcc3b66b",
     "ba76c00f3a34aafd",
     "3888e4484be2e628",
@@ -1972,6 +1973,6 @@
     "b21111400ff21669",
     "288532bc858f9a09"
   ],
-  "next_send_after": 1788717580,
+  "next_send_after": 1788717667,
   "cycle_started_at": "2026-09-06T17:54:02Z"
 }
