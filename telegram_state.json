@@ -1593,13 +1593,14 @@
   ],
   "cycle": 3,
   "cycle_sent": [
+    "a663e17e043be699",
     "de65f9f85b6db9f2"
   ],
   "cycle_sent_fingerprints": [
+    "4feaed10ae98a43c55a5df6e",
     "6839c1e84b78aaebedde1484"
   ],
   "queue": [
-    "a663e17e043be699",
     "bbe12f89c812d0e8",
     "528fbd8e37531cde",
     "346906b9fcc3b66b",
@@ -1970,6 +1971,6 @@
     "b21111400ff21669",
     "288532bc858f9a09"
   ],
-  "next_send_after": 1788717402,
+  "next_send_after": 1788717490,
   "cycle_started_at": "2026-09-06T17:54:02Z"
 }
