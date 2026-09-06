@@ -18,13 +18,20 @@ on:
     paths:
       - "scripts/telegram_bot_control.py"
       - "scripts/telegram_bot_control_verified.py"
+      - "scripts/telegram_bot_control_full.py"
+      - "scripts/telegram_bot_source_extension.py"
+      - "scripts/telegram_managed_sources.py"
       - "scripts/telegram_publisher.py"
       - "scripts/telegram_publisher_control.py"
       - "scripts/telegram_publisher_controlled.py"
+      - "scripts/telegram_cycle_state.py"
       - "scripts/telegram_copy_format.py"
       - "tests/test_telegram_bot_control.py"
       - "tests/test_telegram_bot_control_verified.py"
+      - "tests/test_telegram_bot_sources.py"
+      - "tests/test_telegram_cycle_state.py"
       - "tests/test_telegram_publisher.py"
+      - "requirements.txt"
       - ".github/workflows/telegram-bot-control.yml"
   pull_request:
     branches:
@@ -32,13 +39,20 @@ on:
     paths:
       - "scripts/telegram_bot_control.py"
       - "scripts/telegram_bot_control_verified.py"
+      - "scripts/telegram_bot_control_full.py"
+      - "scripts/telegram_bot_source_extension.py"
+      - "scripts/telegram_managed_sources.py"
       - "scripts/telegram_publisher.py"
       - "scripts/telegram_publisher_control.py"
       - "scripts/telegram_publisher_controlled.py"
+      - "scripts/telegram_cycle_state.py"
       - "scripts/telegram_copy_format.py"
       - "tests/test_telegram_bot_control.py"
       - "tests/test_telegram_bot_control_verified.py"
+      - "tests/test_telegram_bot_sources.py"
+      - "tests/test_telegram_cycle_state.py"
       - "tests/test_telegram_publisher.py"
+      - "requirements.txt"
       - ".github/workflows/telegram-bot-control.yml"
 
 permissions:
@@ -68,16 +82,24 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
       - name: Compile Telegram scripts
         if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: |
           python -m py_compile \
             scripts/telegram_bot_control.py \
             scripts/telegram_bot_control_verified.py \
+            scripts/telegram_bot_control_full.py \
+            scripts/telegram_bot_source_extension.py \
+            scripts/telegram_managed_sources.py \
             scripts/telegram_publisher.py \
             scripts/telegram_publisher_controlled.py \
+            scripts/telegram_cycle_state.py \
             scripts/telegram_publisher_control.py \
-            scripts/telegram_copy_format.py
+            scripts/telegram_copy_format.py \
+            scripts/generator_managed.py
 
       - name: Run Telegram regression tests
         if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -85,6 +107,8 @@ jobs:
           python -m unittest \
             tests.test_telegram_bot_control \
             tests.test_telegram_bot_control_verified \
+            tests.test_telegram_bot_sources \
+            tests.test_telegram_cycle_state \
             tests.test_telegram_publisher -v
 
       - name: Verify Telegram admin authorization path
@@ -109,6 +133,7 @@ jobs:
         if: github.event_name != 'pull_request'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_SOURCE_ENCRYPTION_KEY: ${{ secrets.TELEGRAM_SOURCE_ENCRYPTION_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
           TELEGRAM_CONTROL_CHAT_ID: "-1004469276021"
-        run: python scripts/telegram_bot_control_verified.py
+        run: python scripts/telegram_bot_control_full.py
