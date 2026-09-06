@@ -26,11 +26,16 @@ on:
       - "scripts/telegram_publisher_controlled.py"
       - "scripts/telegram_cycle_state.py"
       - "scripts/telegram_copy_format.py"
+      - "scripts/generator.py"
+      - "scripts/generator_managed.py"
+      - "scripts/deduplicator.py"
+      - "scripts/validation_scheduler.py"
       - "tests/test_telegram_bot_control.py"
       - "tests/test_telegram_bot_control_verified.py"
       - "tests/test_telegram_bot_sources.py"
       - "tests/test_telegram_cycle_state.py"
       - "tests/test_telegram_publisher.py"
+      - "tests/test_fair_validation.py"
       - "requirements.txt"
       - ".github/workflows/telegram-bot-control.yml"
   pull_request:
@@ -47,11 +52,16 @@ on:
       - "scripts/telegram_publisher_controlled.py"
       - "scripts/telegram_cycle_state.py"
       - "scripts/telegram_copy_format.py"
+      - "scripts/generator.py"
+      - "scripts/generator_managed.py"
+      - "scripts/deduplicator.py"
+      - "scripts/validation_scheduler.py"
       - "tests/test_telegram_bot_control.py"
       - "tests/test_telegram_bot_control_verified.py"
       - "tests/test_telegram_bot_sources.py"
       - "tests/test_telegram_cycle_state.py"
       - "tests/test_telegram_publisher.py"
+      - "tests/test_fair_validation.py"
       - "requirements.txt"
       - ".github/workflows/telegram-bot-control.yml"
 
@@ -85,7 +95,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Compile Telegram scripts
+      - name: Compile Telegram and collector scripts
         if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: |
           python -m py_compile \
@@ -99,9 +109,12 @@ jobs:
             scripts/telegram_cycle_state.py \
             scripts/telegram_publisher_control.py \
             scripts/telegram_copy_format.py \
-            scripts/generator_managed.py
+            scripts/generator.py \
+            scripts/generator_managed.py \
+            scripts/deduplicator.py \
+            scripts/validation_scheduler.py
 
-      - name: Run Telegram regression tests
+      - name: Run regression tests
         if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: |
           python -m unittest \
@@ -109,7 +122,8 @@ jobs:
             tests.test_telegram_bot_control_verified \
             tests.test_telegram_bot_sources \
             tests.test_telegram_cycle_state \
-            tests.test_telegram_publisher -v
+            tests.test_telegram_publisher \
+            tests.test_fair_validation -v
 
       - name: Verify Telegram admin authorization path
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
