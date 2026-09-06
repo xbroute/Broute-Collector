@@ -1,3 +1,4 @@
-# این پروژه عمداً بدون وابستگی خارجی غیرضروری نوشته شده است.
-# تمام قابلیت‌ها (HTTP fetch, JSON, base64, socket) از کتابخانه استاندارد پایتون 3.11+ استفاده می‌کنند.
-# این فایل برای سازگاری با GitHub Actions و ابزارهای CI نگه داشته شده است.
+# Core collector logic uses the Python standard library.
+# cryptography is used only to keep admin-added subscription URLs encrypted at
+# rest in this public repository's telegram-bot-state branch.
+cryptography>=42
