@@ -48,6 +48,50 @@ class ManagedSourceCoreTests(unittest.TestCase):
                 "https://example.com/sub",
             )
 
+    def test_fetch_connection_is_pinned_to_the_validated_ip(self):
+        response = mock.Mock()
+        response.status = 200
+        response.getheaders.return_value = [("Content-Type", "text/plain")]
+        response.read.return_value = b"vless://test"
+
+        connection = mock.Mock()
+        connection.getresponse.return_value = response
+
+        with (
+            mock.patch(
+                "telegram_managed_sources.socket.getaddrinfo",
+                return_value=[(2, 1, 6, "", ("1.1.1.1", 443))],
+            ),
+            mock.patch(
+                "telegram_managed_sources._PinnedHTTPSConnection",
+                return_value=connection,
+            ) as pinned,
+        ):
+            status, _, body = managed._fetch_one_hop("https://Example.com/sub?q=1")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"vless://test")
+        pinned.assert_called_once_with("example.com", "1.1.1.1", 443, 15)
+        connection.request.assert_called_once()
+        request_args = connection.request.call_args
+        self.assertEqual(request_args.args[:2], ("GET", "/sub?q=1"))
+        self.assertEqual(request_args.kwargs["headers"]["Host"], "example.com")
+
+    def test_redirect_destination_is_revalidated_and_pinned(self):
+        with mock.patch(
+            "telegram_managed_sources._fetch_one_hop",
+            side_effect=[
+                (302, {"location": "https://second.example/sub"}, b""),
+                (200, {}, b"vless://test"),
+            ],
+        ) as one_hop:
+            text = managed.fetch_subscription("https://first.example/sub")
+
+        self.assertEqual(text, "vless://test")
+        self.assertEqual(one_hop.call_count, 2)
+        self.assertEqual(one_hop.call_args_list[0].args[0], "https://first.example/sub")
+        self.assertEqual(one_hop.call_args_list[1].args[0], "https://second.example/sub")
+
     def test_valid_config_count_supports_plain_and_base64_subscriptions(self):
         config = (
             "vless://00000000-0000-0000-0000-000000000000@example.com:443"
