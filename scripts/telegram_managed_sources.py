@@ -6,23 +6,27 @@ one Fernet-encrypted blob on telegram-bot-state. The encryption key is derived
 from TELEGRAM_SOURCE_ENCRYPTION_KEY when configured, otherwise from the existing
 TELEGRAM_BOT_TOKEN for zero-setup backwards compatibility.
 
-Network validation rejects local/private/link-local/reserved destinations and
-re-validates every HTTP redirect before following it. Source content is bounded
-and must contain at least one config understood by the existing parser.
+Managed-source HTTP(S) fetches are SSRF-hardened: every hop is normalized,
+resolved, rejected unless every resolved address is globally routable, and the
+actual TCP socket is pinned to one of those already-validated addresses. HTTPS
+still verifies the certificate and SNI against the original hostname. Redirects
+repeat the same validation/pinning process. Payload size and redirect depth are
+bounded and content must contain at least one config understood by the existing
+parser.
 """
 from __future__ import annotations
 
 import base64
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
 import socket
+import ssl
 import time
-import urllib.error
-import urllib.request
 from typing import Any, Dict, Iterable, List, Tuple
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -34,7 +38,9 @@ SOURCE_STATE_VERSION = 1
 MAX_MANAGED_SOURCES = 25
 MAX_SOURCE_BYTES = 2_000_000
 FETCH_TIMEOUT_SECONDS = 15
+MAX_REDIRECTS = 5
 USER_AGENT = "Broute-Collector/managed-subscription"
+REDIRECT_STATUSES = {301, 302, 303, 307, 308}
 
 
 class SourceValidationError(ValueError):
@@ -43,15 +49,6 @@ class SourceValidationError(ValueError):
 
 class SourceCryptoError(RuntimeError):
     pass
-
-
-class SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
-    max_repeats = 2
-    max_redirections = 5
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
-        validate_public_url(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 def source_secret() -> str:
@@ -139,7 +136,8 @@ def normalize_subscription_url(url: str) -> str:
     return urlunsplit((scheme, netloc, parts.path or "/", parts.query, ""))
 
 
-def validate_public_url(url: str) -> str:
+def resolve_public_addresses(url: str) -> Tuple[str, List[str]]:
+    """Normalize URL and return only after every DNS result is globally routable."""
     normalized = normalize_subscription_url(url)
     parts = urlsplit(normalized)
     host = str(parts.hostname or "")
@@ -150,11 +148,15 @@ def validate_public_url(url: str) -> str:
     except socket.gaierror as exc:
         raise SourceValidationError("دامنه‌ی subscription قابل resolve نیست") from exc
 
-    addresses = {info[4][0].split("%", 1)[0] for info in infos if info and info[4]}
-    if not addresses:
-        raise SourceValidationError("دامنه‌ی subscription هیچ IP معتبری ندارد")
-
-    for address in addresses:
+    addresses: List[str] = []
+    seen = set()
+    for info in infos:
+        if not info or not info[4]:
+            continue
+        address = str(info[4][0]).split("%", 1)[0]
+        if address in seen:
+            continue
+        seen.add(address)
         try:
             ip = ipaddress.ip_address(address)
         except ValueError as exc:
@@ -163,36 +165,153 @@ def validate_public_url(url: str) -> str:
             raise SourceValidationError(
                 "منبعی که به IP خصوصی/local/link-local/reserved وصل شود پذیرفته نمی‌شود"
             )
+        addresses.append(address)
 
+    if not addresses:
+        raise SourceValidationError("دامنه‌ی subscription هیچ IP معتبری ندارد")
+    return normalized, addresses
+
+
+def validate_public_url(url: str) -> str:
+    normalized, _ = resolve_public_addresses(url)
     return normalized
 
 
-def fetch_subscription(url: str) -> str:
-    normalized = validate_public_url(url)
-    opener = urllib.request.build_opener(SafeRedirectHandler())
-    request = urllib.request.Request(
-        normalized,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "text/plain, application/octet-stream, */*;q=0.5",
-            "Accept-Encoding": "identity",
-        },
-    )
-    try:
-        with opener.open(request, timeout=FETCH_TIMEOUT_SECONDS) as response:
-            # urllib may expose a final redirected URL; validate it again after
-            # the connection as a second defensive check.
-            validate_public_url(response.geturl())
-            data = response.read(MAX_SOURCE_BYTES + 1)
-    except (urllib.error.URLError, TimeoutError, OSError, SourceValidationError) as exc:
-        raise SourceValidationError("دریافت subscription ناموفق بود") from exc
+class _PinnedHTTPConnection(http.client.HTTPConnection):
+    """HTTP connection whose TCP destination cannot change after DNS validation."""
 
-    if len(data) > MAX_SOURCE_BYTES:
-        raise SourceValidationError("حجم subscription بیشتر از سقف 2MB است")
-    text = data.decode("utf-8", errors="ignore")
-    if not text.strip():
-        raise SourceValidationError("subscription خالی است")
-    return text
+    def __init__(self, hostname: str, pinned_ip: str, port: int, timeout: int):
+        super().__init__(hostname, port=port, timeout=timeout)
+        self._pinned_ip = pinned_ip
+
+    def connect(self) -> None:
+        self.sock = socket.create_connection(
+            (self._pinned_ip, self.port),
+            self.timeout,
+            self.source_address,
+        )
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS pinned to validated IP while retaining hostname SNI/cert checks."""
+
+    def __init__(self, hostname: str, pinned_ip: str, port: int, timeout: int):
+        super().__init__(
+            hostname,
+            port=port,
+            timeout=timeout,
+            context=ssl.create_default_context(),
+        )
+        self._pinned_ip = pinned_ip
+
+    def connect(self) -> None:
+        raw_sock = socket.create_connection(
+            (self._pinned_ip, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        try:
+            self.sock = self._context.wrap_socket(raw_sock, server_hostname=self.host)
+        except Exception:
+            raw_sock.close()
+            raise
+
+
+def _request_target(parts) -> str:
+    target = parts.path or "/"
+    if parts.query:
+        target += f"?{parts.query}"
+    return target
+
+
+def _host_header(parts) -> str:
+    hostname = str(parts.hostname or "")
+    if ":" in hostname:
+        hostname = f"[{hostname}]"
+    default_port = 443 if parts.scheme == "https" else 80
+    if parts.port is not None and parts.port != default_port:
+        return f"{hostname}:{parts.port}"
+    return hostname
+
+
+def _fetch_one_hop(url: str) -> Tuple[int, Dict[str, str], bytes]:
+    normalized, addresses = resolve_public_addresses(url)
+    parts = urlsplit(normalized)
+    host = str(parts.hostname or "")
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+
+    last_error: Exception | None = None
+    for pinned_ip in addresses:
+        connection: http.client.HTTPConnection
+        if parts.scheme == "https":
+            connection = _PinnedHTTPSConnection(host, pinned_ip, port, FETCH_TIMEOUT_SECONDS)
+        else:
+            connection = _PinnedHTTPConnection(host, pinned_ip, port, FETCH_TIMEOUT_SECONDS)
+
+        try:
+            connection.request(
+                "GET",
+                _request_target(parts),
+                headers={
+                    "Host": _host_header(parts),
+                    "User-Agent": USER_AGENT,
+                    "Accept": "text/plain, application/octet-stream, */*;q=0.5",
+                    "Accept-Encoding": "identity",
+                    "Connection": "close",
+                },
+            )
+            response = connection.getresponse()
+            status = int(response.status)
+            headers = {str(k).lower(): str(v) for k, v in response.getheaders()}
+
+            if status in REDIRECT_STATUSES:
+                # Redirect bodies are irrelevant and may be arbitrarily large.
+                response.close()
+                return status, headers, b""
+
+            data = response.read(MAX_SOURCE_BYTES + 1)
+            response.close()
+            return status, headers, data
+        except (OSError, ssl.SSLError, http.client.HTTPException, TimeoutError) as exc:
+            last_error = exc
+        finally:
+            connection.close()
+
+    raise SourceValidationError("اتصال امن به subscription ناموفق بود") from last_error
+
+
+def fetch_subscription(url: str) -> str:
+    current = normalize_subscription_url(url)
+
+    for redirect_count in range(MAX_REDIRECTS + 1):
+        try:
+            status, headers, data = _fetch_one_hop(current)
+        except SourceValidationError:
+            raise
+        except Exception as exc:
+            raise SourceValidationError("دریافت subscription ناموفق بود") from exc
+
+        if status in REDIRECT_STATUSES:
+            location = str(headers.get("location") or "").strip()
+            if not location:
+                raise SourceValidationError("redirect بدون مقصد معتبر دریافت شد")
+            if redirect_count >= MAX_REDIRECTS:
+                raise SourceValidationError("تعداد redirectهای subscription بیش از حد مجاز است")
+            current = normalize_subscription_url(urljoin(current, location))
+            # The next loop resolves, validates and pins the redirect destination.
+            continue
+
+        if not (200 <= status < 300):
+            raise SourceValidationError(f"subscription پاسخ HTTP {status} داد")
+        if len(data) > MAX_SOURCE_BYTES:
+            raise SourceValidationError("حجم subscription بیشتر از سقف 2MB است")
+
+        text = data.decode("utf-8", errors="ignore")
+        if not text.strip():
+            raise SourceValidationError("subscription خالی است")
+        return text
+
+    raise SourceValidationError("redirect subscription قابل تکمیل نبود")
 
 
 def valid_config_count(content: str) -> int:
