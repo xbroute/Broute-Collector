@@ -37,12 +37,14 @@ class TelegramCycleStateTests(unittest.TestCase):
         self.tempdir = tempfile.TemporaryDirectory()
         self.old_state_path = publisher.STATE_PATH
         self.old_servers_path = publisher.SERVERS_PATH
+        self.old_sync_queue = publisher.sync_queue
         publisher.STATE_PATH = os.path.join(self.tempdir.name, "state.json")
         publisher.SERVERS_PATH = os.path.join(self.tempdir.name, "servers.json")
 
     def tearDown(self):
         publisher.STATE_PATH = self.old_state_path
         publisher.SERVERS_PATH = self.old_servers_path
+        publisher.sync_queue = self.old_sync_queue
         self.tempdir.cleanup()
 
     def write_servers(self, servers):
@@ -76,8 +78,6 @@ class TelegramCycleStateTests(unittest.TestCase):
         self.assertEqual(cycle_fps, {fp})
         self.assertEqual(queue, [])
 
-        # Persisting an exhausted migrated round prepares round 2, while the
-        # all-time history remains intact.
         adapter.save_state(cycle_sent, cycle_fps, queue, next_send)
         state = self.read_state()
         self.assertEqual(state["cycle"], 2)
@@ -111,6 +111,100 @@ class TelegramCycleStateTests(unittest.TestCase):
         self.assertEqual(state["cycle"], 1)
         self.assertEqual(state["cycle_sent"], ["srv-1"])
         self.assertEqual(state["queue"], ["srv-2"])
+
+    def test_new_live_config_jumps_ahead_of_recycled_existing_backlog(self):
+        old_a = sample_server("old-a", "old-a")
+        old_b = sample_server("old-b", "old-b")
+        newcomer = sample_server("new-c", "new-c")
+        old_fp_a = publisher.telegram_fingerprint(old_a)
+        old_fp_b = publisher.telegram_fingerprint(old_b)
+        self.write_servers([old_a, old_b, newcomer])
+        self.write_state(
+            {
+                "sent": ["historic-a", "historic-b"],
+                "sent_fingerprints": [old_fp_a, old_fp_b],
+                "cycle": 2,
+                "cycle_sent": [],
+                "cycle_sent_fingerprints": [],
+                "queue": ["old-a", "old-b"],
+                "next_send_after": 0,
+            }
+        )
+
+        adapter = telegram_cycle_state.CycleStateAdapter(publisher)
+        online_by_id, queue, added, stale, duplicate = adapter.sync_queue(
+            [old_a, old_b, newcomer],
+            set(),
+            set(),
+            ["old-a", "old-b"],
+        )
+
+        self.assertEqual(set(online_by_id), {"old-a", "old-b", "new-c"})
+        self.assertEqual(added, 1)
+        self.assertEqual(stale, 0)
+        self.assertEqual(duplicate, 0)
+        self.assertEqual(queue, ["new-c", "old-a", "old-b"])
+
+    def test_semantically_seen_id_change_is_not_misclassified_as_new(self):
+        previous_id = sample_server("old-id", "same")
+        replacement_id = sample_server("new-id", "same")
+        # Same connection payload except cosmetic fragment/id. Fingerprint is
+        # deliberately semantic, so canonical-ID migrations do not become a
+        # priority/resend storm.
+        previous_id["raw"] = previous_id["raw"].rsplit("#", 1)[0] + "#old-label"
+        replacement_id["raw"] = previous_id["raw"].rsplit("#", 1)[0] + "#new-label"
+        old_fp = publisher.telegram_fingerprint(previous_id)
+        self.write_servers([replacement_id])
+        self.write_state(
+            {
+                "sent": ["old-id"],
+                "sent_fingerprints": [old_fp],
+                "cycle": 2,
+                "cycle_sent": [],
+                "cycle_sent_fingerprints": [],
+                "queue": [],
+                "next_send_after": 0,
+            }
+        )
+
+        adapter = telegram_cycle_state.CycleStateAdapter(publisher)
+        _, queue, added, *_ = adapter.sync_queue(
+            [replacement_id],
+            set(),
+            set(),
+            [],
+        )
+        self.assertEqual(added, 1)
+        self.assertEqual(queue, ["new-id"])
+        self.assertEqual(
+            publisher.telegram_fingerprint(replacement_id),
+            old_fp,
+        )
+        # It may participate in a later cycle, but it is not classified as an
+        # all-time newcomer solely because its collector ID changed.
+        self.assertEqual(
+            adapter._prioritize_all_time_unseen({"new-id": replacement_id}, queue),
+            ["new-id"],
+        )
+
+    def test_install_wraps_sync_queue_once(self):
+        server = sample_server("srv-1", "a")
+        self.write_servers([server])
+        self.write_state(
+            {
+                "sent": [],
+                "sent_fingerprints": [],
+                "cycle": 1,
+                "cycle_sent": [],
+                "cycle_sent_fingerprints": [],
+                "queue": [],
+                "next_send_after": 0,
+            }
+        )
+        adapter = telegram_cycle_state.install_cycle_state(publisher)
+        self.assertEqual(publisher.sync_queue, adapter.sync_queue)
+        _, queue, *_ = publisher.sync_queue([server], set(), set(), [])
+        self.assertEqual(queue, ["srv-1"])
 
     def test_no_empty_cycle_spin_when_nothing_publishable(self):
         server = sample_server("srv-off", status="offline")
@@ -170,8 +264,6 @@ class TelegramCycleStateTests(unittest.TestCase):
         self.assertEqual(state["cycle_sent"], [])
         self.assertGreater(len(state["queue"]), 0)
         self.assertTrue(set(state["queue"]).issubset(all_ids))
-        # All-time history is retained; a new cycle is not implemented by
-        # deleting sent history.
         self.assertTrue(all_ids.issubset(set(state["sent"])))
 
 
