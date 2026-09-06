@@ -5,6 +5,11 @@ that all-time history while introducing a per-cycle sent set. When the current
 cycle has exhausted every currently publishable semantic config, the next cycle
 is prepared automatically from the latest snapshot instead of leaving the
 publisher permanently idle.
+
+Live subscriptions can add configs while a cycle already has a large recycled
+backlog. Those truly new semantic configs are promoted ahead of configs that
+have already been published in an earlier cycle, so freshness is not hidden
+behind hundreds of routine repeats. Ordering remains stable within each class.
 """
 from __future__ import annotations
 
@@ -38,6 +43,9 @@ class CycleStateAdapter:
     def __init__(self, publisher_module: Any):
         self.publisher = publisher_module
         self.state_path = publisher_module.STATE_PATH
+        # Keep an immutable reference to the base queue synchronizer before
+        # install_cycle_state replaces publisher.sync_queue with our wrapper.
+        self._base_sync_queue = publisher_module.sync_queue
         self.state: Dict[str, Any] = {}
         self._load_raw()
 
@@ -113,6 +121,60 @@ class CycleStateAdapter:
 
         return sent_ids, sent_fps, queue, float(self.state.get("next_send_after", 0) or 0)
 
+    def _prioritize_all_time_unseen(
+        self,
+        online_by_id: Dict[str, Dict[str, Any]],
+        queue: List[str],
+    ) -> List[str]:
+        """Stable-partition queue so never-published semantic configs come first."""
+        all_time_fps = set(self.state.get("sent_fingerprints", []))
+        unseen: List[str] = []
+        recycled: List[str] = []
+
+        for server_id in queue:
+            server = online_by_id.get(str(server_id))
+            if server is None:
+                recycled.append(str(server_id))
+                continue
+            fingerprint = self.publisher.telegram_fingerprint(server)
+            if fingerprint not in all_time_fps:
+                unseen.append(str(server_id))
+            else:
+                recycled.append(str(server_id))
+
+        prioritized = unseen + recycled
+        if unseen and prioritized != list(queue):
+            print(
+                f"[telegram-cycle] prioritized {len(unseen)} never-sent config(s) "
+                "ahead of recycled backlog.",
+                flush=True,
+            )
+        return prioritized
+
+    def sync_queue(
+        self,
+        servers: List[Dict],
+        cycle_sent: Set[str],
+        cycle_fingerprints: Set[str],
+        queue: List[str],
+    ):
+        """Delegate normal dedupe/stale cleanup, then prioritize true newcomers."""
+        result = self._base_sync_queue(
+            servers,
+            cycle_sent,
+            cycle_fingerprints,
+            queue,
+        )
+        online_by_id, clean_queue, added_new, removed_stale, removed_duplicate = result
+        prioritized = self._prioritize_all_time_unseen(online_by_id, clean_queue)
+        return (
+            online_by_id,
+            prioritized,
+            added_new,
+            removed_stale,
+            removed_duplicate,
+        )
+
     def _plan_queue(
         self,
         cycle_sent: Set[str],
@@ -129,14 +191,14 @@ class CycleStateAdapter:
 
         # First check whether the current cycle still has unseen/currently-online
         # candidates. This covers live-check skips and newly appeared configs.
-        online_by_id, pending, *_ = self.publisher.sync_queue(
+        online_by_id, pending, *_ = self._base_sync_queue(
             servers,
             cycle_sent,
             cycle_fps,
             [],
         )
         if pending:
-            return pending, False
+            return self._prioritize_all_time_unseen(online_by_id, pending), False
 
         # A new cycle is valid only if there is at least one publishable config
         # in the latest snapshot. Do not spin empty cycles when everything is
@@ -144,11 +206,11 @@ class CycleStateAdapter:
         if not online_by_id:
             return [], False
 
-        _, refill, *_ = self.publisher.sync_queue(servers, set(), set(), [])
+        refill_online, refill, *_ = self._base_sync_queue(servers, set(), set(), [])
         if not refill:
             return [], False
 
-        return refill, True
+        return self._prioritize_all_time_unseen(refill_online, refill), True
 
     def save_state(
         self,
@@ -159,6 +221,11 @@ class CycleStateAdapter:
     ) -> None:
         all_time_sent = set(self.state.get("sent", [])) | set(cycle_sent)
         all_time_fps = set(self.state.get("sent_fingerprints", [])) | set(cycle_fingerprints)
+
+        # Make newly sent fingerprints visible to queue prioritization immediately
+        # in the same process, before _plan_queue evaluates any refill.
+        self.state["sent"] = sorted(all_time_sent)
+        self.state["sent_fingerprints"] = sorted(all_time_fps)
 
         queue_to_save, rolled = self._plan_queue(
             set(cycle_sent),
@@ -204,4 +271,5 @@ def install_cycle_state(publisher_module: Any) -> CycleStateAdapter:
     adapter = CycleStateAdapter(publisher_module)
     publisher_module.load_state = adapter.load_state
     publisher_module.save_state = adapter.save_state
+    publisher_module.sync_queue = adapter.sync_queue
     return adapter
