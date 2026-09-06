@@ -1,4 +1,4 @@
-"""Run telegram_publisher with live ON/OFF control and copy-friendly output.
+"""Run telegram_publisher with live ON/OFF control, cycles, and copy-friendly output.
 
 Telegram commands are consumed exclusively by the dedicated Telegram Bot Control
 workflow. This wrapper NEVER calls getUpdates. It only reads the durable control
@@ -9,6 +9,11 @@ without losing queue state.
 For outgoing configs, the complete config is rendered as Telegram HTML <pre>.
 When the exact config is at most 256 characters, the payload also receives the
 Bot API native CopyTextButton. Longer configs are never truncated.
+
+Publishing state is cycle-aware: all-time history remains durable, while each
+round has its own sent/fingerprint set. Once every currently publishable config
+has been exhausted, the next round is automatically prepared from the freshest
+servers.json snapshot.
 """
 from __future__ import annotations
 
@@ -18,6 +23,7 @@ import time
 
 import telegram_publisher as publisher
 from telegram_copy_format import decorate_send_payload, make_copyable_message
+from telegram_cycle_state import install_cycle_state
 from telegram_publisher_control import remote_enabled
 
 CHECK_INTERVAL_SECONDS = max(
@@ -95,6 +101,11 @@ def main() -> int:
     publisher.live_validate = controlled_live_validate
     publisher.send_message = controlled_send_message
     publisher._telegram_request_once = decorated_telegram_request_once
+
+    # Install after the base module is fully imported but before main() reads
+    # state. Existing sent/sent_fingerprints become all-time history and are
+    # migrated to cycle #1 without an immediate resend storm.
+    install_cycle_state(publisher)
 
     try:
         ensure_enabled()
