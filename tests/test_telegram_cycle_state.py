@@ -141,7 +141,7 @@ class TelegramCycleStateTests(unittest.TestCase):
         with open(snapshot_path, "r", encoding="utf-8") as f:
             snapshot = json.load(f)
 
-        publishable = [server for server in snapshot if publisher.is_publishable(server)]
+        publishable = [server for server in snapshot if publisher.publishable(server)]
         if not publishable:
             self.skipTest("repository snapshot has no publishable configs")
 
