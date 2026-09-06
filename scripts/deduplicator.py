@@ -27,10 +27,10 @@ def _decode_vmess(raw: str) -> Dict[str, Any] | None:
         return None
 
 
-def canonical_connection_key(cfg: Any) -> str:
-    """Stable ID for the actual connection, excluding only display metadata."""
-    raw = str(getattr(cfg, "raw", "") or "").strip()
-    protocol = str(getattr(cfg, "protocol", "") or "").lower()
+def canonical_raw_connection_key(raw: str, protocol: str) -> str:
+    """Stable ID for actual connection data, excluding only display metadata."""
+    raw = str(raw or "").strip()
+    protocol = str(protocol or "").lower()
     canonical: Any = None
 
     if protocol == "vmess" and raw.startswith("vmess://"):
@@ -73,6 +73,13 @@ def canonical_connection_key(cfg: Any) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
+
+
+def canonical_connection_key(cfg: Any) -> str:
+    return canonical_raw_connection_key(
+        str(getattr(cfg, "raw", "") or ""),
+        str(getattr(cfg, "protocol", "") or ""),
+    )
 
 
 def _source_ref(item: Dict[str, Any]) -> Dict[str, str]:
