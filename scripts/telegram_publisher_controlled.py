@@ -10,6 +10,10 @@ For outgoing configs, the complete config is rendered as Telegram HTML <pre>.
 When the exact config is at most 256 characters, the payload also receives the
 Bot API native CopyTextButton. Longer configs are never truncated.
 
+Every config post also advertises one stable online-only subscription feed. The
+feed is rebuilt by the collector from the final servers.json snapshot, so static
+sources and encrypted bot-managed sources automatically appear in the same URL.
+
 Publishing state is cycle-aware: all-time history remains durable, while each
 round has its own sent/fingerprint set. Once every currently publishable config
 has been exhausted, the next round is automatically prepared from the freshest
@@ -30,6 +34,10 @@ CHECK_INTERVAL_SECONDS = max(
     2,
     int(os.environ.get("TELEGRAM_CONTROL_CHECK_INTERVAL_SECONDS", "5")),
 )
+ONLINE_SUBSCRIPTION_URL = os.environ.get(
+    "BROUTE_ONLINE_SUBSCRIPTION_URL",
+    "https://xbroute.github.io/Broute-Collector/data/online-sub-base64.txt",
+).strip()
 
 
 class PublishingDisabled(RuntimeError):
@@ -39,6 +47,70 @@ class PublishingDisabled(RuntimeError):
 def ensure_enabled() -> None:
     if not remote_enabled("."):
         raise PublishingDisabled("Telegram publisher is switched OFF")
+
+
+def subscription_footer() -> str:
+    return "\n".join(
+        [
+            "🔄 لینک سابسکریپشن همیشه‌به‌روز",
+            "همه کانفیگ‌های آنلاین داخل این لینک هستند؛ یک‌بار به برنامه اضافه کن و بعد فقط Update/Refresh بزن.",
+            f"🔗 {ONLINE_SUBSCRIPTION_URL}",
+        ]
+    )
+
+
+def append_subscription_footer(message: str) -> str:
+    decorated = f"{message}\n\n{subscription_footer()}"
+    if len(decorated) > publisher.MAX_TELEGRAM_TEXT_LENGTH:
+        raise ValueError(
+            f"message with subscription footer exceeds Telegram's "
+            f"{publisher.MAX_TELEGRAM_TEXT_LENGTH}-character limit"
+        )
+    return decorated
+
+
+def _has_native_copy_button(payload: dict) -> bool:
+    markup = payload.get("reply_markup")
+    if not isinstance(markup, dict):
+        return False
+    rows = markup.get("inline_keyboard")
+    if not isinstance(rows, list):
+        return False
+    return any(
+        isinstance(button, dict) and isinstance(button.get("copy_text"), dict)
+        for row in rows
+        if isinstance(row, list)
+        for button in row
+    )
+
+
+def add_subscription_button(payload: dict) -> dict:
+    decorated = dict(payload)
+    markup = decorated.get("reply_markup")
+    if isinstance(markup, dict):
+        markup = dict(markup)
+        rows = [list(row) for row in markup.get("inline_keyboard", []) if isinstance(row, list)]
+    else:
+        markup = {}
+        rows = []
+
+    if not any(
+        isinstance(button, dict) and button.get("url") == ONLINE_SUBSCRIPTION_URL
+        for row in rows
+        for button in row
+    ):
+        rows.append(
+            [
+                {
+                    "text": "🔄 لینک سابسکریپشن",
+                    "url": ONLINE_SUBSCRIPTION_URL,
+                }
+            ]
+        )
+
+    markup["inline_keyboard"] = rows
+    decorated["reply_markup"] = markup
+    return decorated
 
 
 def controlled_wait_until_next_slot(next_send_after: float) -> None:
@@ -67,7 +139,7 @@ def main() -> int:
     original_telegram_request_once = publisher._telegram_request_once
 
     def copyable_build_message(server):
-        plain_message = original_build_message(server)
+        plain_message = append_subscription_footer(original_build_message(server))
         protocol = str(server.get("protocol") or "").lower()
         config = publisher.brand_raw_config(str(server.get("raw") or ""), protocol)
         return make_copyable_message(plain_message, config)
@@ -87,10 +159,13 @@ def main() -> int:
         source_text = payload.get("text")
         config_chars = len(getattr(source_text, "copy_text", ""))
         decorated = decorate_send_payload(payload)
+        native_copy = _has_native_copy_button(decorated)
+        decorated = add_subscription_button(decorated)
         if config_chars:
             print(
                 "[telegram-copy] preformatted=yes "
-                f"native_copy_button={'yes' if 'reply_markup' in decorated else 'no'} "
+                f"native_copy_button={'yes' if native_copy else 'no'} "
+                "subscription_button=yes "
                 f"config_chars={config_chars}",
                 flush=True,
             )
