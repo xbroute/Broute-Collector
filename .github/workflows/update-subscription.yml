@@ -68,6 +68,7 @@ jobs:
             git reset --hard origin/main
 
             python scripts/generator_managed.py
+            python scripts/generate_online_subscription.py
             git add data/
 
             if git diff --cached --quiet; then

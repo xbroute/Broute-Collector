@@ -28,6 +28,7 @@ on:
       - "scripts/telegram_copy_format.py"
       - "scripts/generator.py"
       - "scripts/generator_managed.py"
+      - "scripts/generate_online_subscription.py"
       - "scripts/deduplicator.py"
       - "scripts/validation_scheduler.py"
       - "tests/test_telegram_bot_control.py"
@@ -35,6 +36,7 @@ on:
       - "tests/test_telegram_bot_sources.py"
       - "tests/test_telegram_cycle_state.py"
       - "tests/test_telegram_publisher.py"
+      - "tests/test_online_subscription.py"
       - "tests/test_fair_validation.py"
       - "requirements.txt"
       - ".github/workflows/telegram-bot-control.yml"
@@ -54,6 +56,7 @@ on:
       - "scripts/telegram_copy_format.py"
       - "scripts/generator.py"
       - "scripts/generator_managed.py"
+      - "scripts/generate_online_subscription.py"
       - "scripts/deduplicator.py"
       - "scripts/validation_scheduler.py"
       - "tests/test_telegram_bot_control.py"
@@ -61,6 +64,7 @@ on:
       - "tests/test_telegram_bot_sources.py"
       - "tests/test_telegram_cycle_state.py"
       - "tests/test_telegram_publisher.py"
+      - "tests/test_online_subscription.py"
       - "tests/test_fair_validation.py"
       - "requirements.txt"
       - ".github/workflows/telegram-bot-control.yml"
@@ -111,6 +115,7 @@ jobs:
             scripts/telegram_copy_format.py \
             scripts/generator.py \
             scripts/generator_managed.py \
+            scripts/generate_online_subscription.py \
             scripts/deduplicator.py \
             scripts/validation_scheduler.py
 
@@ -123,6 +128,7 @@ jobs:
             tests.test_telegram_bot_sources \
             tests.test_telegram_cycle_state \
             tests.test_telegram_publisher \
+            tests.test_online_subscription \
             tests.test_fair_validation -v
 
       - name: Verify Telegram admin authorization path
