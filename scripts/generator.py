@@ -152,7 +152,8 @@ def _apply_display_name(record: Dict[str, Any]) -> Dict[str, Any]:
     if known_country:
         flag = country_flag(str(record.get("country") or ""))
         country_name = str(record.get("country_name") or "Unknown")
-        display_name = f"{flag} {country_name}".strip() if flag else country_name
+        base_name = f"{flag} {country_name}".strip() if flag else country_name
+        display_name = f"{base_name} | @xbroute"
     else:
         display_name = "@xbroute"
 
