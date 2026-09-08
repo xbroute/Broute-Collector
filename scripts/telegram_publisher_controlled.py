@@ -10,9 +10,10 @@ For outgoing configs, the complete config is rendered as Telegram HTML <pre>.
 When the exact config is at most 256 characters, the payload also receives the
 Bot API native CopyTextButton. Longer configs are never truncated.
 
-Every config post also advertises one stable online-only subscription feed. The
-feed is rebuilt by the collector from the final servers.json snapshot, so static
-sources and encrypted bot-managed sources automatically appear in the same URL.
+Every config post also advertises one stable online-only subscription feed and a
+purchase CTA. The purchase URL is read from main before every config send, so an
+admin can change it from the private Telegram bot without restarting the
+publisher or modifying queue state.
 
 Publishing state is cycle-aware: all-time history remains durable, while each
 round has its own sent/fingerprint set. Once every currently publishable config
@@ -24,10 +25,17 @@ from __future__ import annotations
 import os
 import sys
 import time
+from urllib.parse import urlsplit
 
 import telegram_publisher as publisher
 from telegram_copy_format import decorate_send_payload, make_copyable_message
 from telegram_cycle_state import install_cycle_state
+from telegram_promo_config import (
+    BUTTON_TEXT as PURCHASE_BUTTON_TEXT,
+    DEFAULT_PROMO_URL,
+    local_promo_url,
+    remote_promo_url,
+)
 from telegram_publisher_control import remote_enabled
 
 CHECK_INTERVAL_SECONDS = max(
@@ -84,7 +92,7 @@ def _has_native_copy_button(payload: dict) -> bool:
     )
 
 
-def add_subscription_button(payload: dict) -> dict:
+def _append_url_button(payload: dict, *, text: str, url: str) -> dict:
     decorated = dict(payload)
     markup = decorated.get("reply_markup")
     if isinstance(markup, dict):
@@ -95,22 +103,54 @@ def add_subscription_button(payload: dict) -> dict:
         rows = []
 
     if not any(
-        isinstance(button, dict) and button.get("url") == ONLINE_SUBSCRIPTION_URL
+        isinstance(button, dict)
+        and button.get("text") == text
+        and button.get("url") == url
         for row in rows
         for button in row
     ):
-        rows.append(
-            [
-                {
-                    "text": "🔄 لینک سابسکریپشن",
-                    "url": ONLINE_SUBSCRIPTION_URL,
-                }
-            ]
-        )
+        rows.append([{"text": text, "url": url}])
 
     markup["inline_keyboard"] = rows
     decorated["reply_markup"] = markup
     return decorated
+
+
+def add_subscription_button(payload: dict) -> dict:
+    return _append_url_button(
+        payload,
+        text="🔄 لینک سابسکریپشن",
+        url=ONLINE_SUBSCRIPTION_URL,
+    )
+
+
+def add_purchase_button(payload: dict, purchase_url: str) -> dict:
+    return _append_url_button(
+        payload,
+        text=PURCHASE_BUTTON_TEXT,
+        url=purchase_url,
+    )
+
+
+def current_purchase_url() -> str:
+    """Read the freshest durable URL; fall back safely without blocking sends."""
+    try:
+        return remote_promo_url(".")
+    except Exception as remote_exc:
+        print(
+            f"[telegram-promo] remote URL read failed; using checkout fallback: {remote_exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        try:
+            return local_promo_url(".")
+        except Exception as local_exc:
+            print(
+                f"[telegram-promo] local URL read failed; using built-in default: {local_exc}",
+                file=sys.stderr,
+                flush=True,
+            )
+            return DEFAULT_PROMO_URL
 
 
 def controlled_wait_until_next_slot(next_send_after: float) -> None:
@@ -160,15 +200,22 @@ def main() -> int:
         config_chars = len(getattr(source_text, "copy_text", ""))
         decorated = decorate_send_payload(payload)
         native_copy = _has_native_copy_button(decorated)
-        decorated = add_subscription_button(decorated)
+
+        purchase_url = ""
         if config_chars:
+            decorated = add_subscription_button(decorated)
+            purchase_url = current_purchase_url()
+            decorated = add_purchase_button(decorated, purchase_url)
+
+            host = urlsplit(purchase_url).hostname or "unknown"
             print(
                 "[telegram-copy] preformatted=yes "
                 f"native_copy_button={'yes' if native_copy else 'no'} "
-                "subscription_button=yes "
-                f"config_chars={config_chars}",
+                "subscription_button=yes purchase_button=yes "
+                f"purchase_host={host} config_chars={config_chars}",
                 flush=True,
             )
+
         return original_telegram_request_once(token, decorated)
 
     publisher.build_message = copyable_build_message
