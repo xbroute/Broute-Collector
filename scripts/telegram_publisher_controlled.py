@@ -11,9 +11,9 @@ When the exact config is at most 256 characters, the payload also receives the
 Bot API native CopyTextButton. Longer configs are never truncated.
 
 Every config post also advertises one stable online-only subscription feed and a
-purchase CTA. The purchase URL is read from main before every config send, so an
-admin can change it from the private Telegram bot without restarting the
-publisher or modifying queue state.
+purchase CTA. The purchase URL and button label are both read from main before
+every config send, so an admin can change either from the private Telegram bot
+without restarting the publisher or modifying queue state.
 
 Publishing state is cycle-aware: all-time history remains durable, while each
 round has its own sent/fingerprint set. Once every currently publishable config
@@ -31,10 +31,10 @@ import telegram_publisher as publisher
 from telegram_copy_format import decorate_send_payload, make_copyable_message
 from telegram_cycle_state import install_cycle_state
 from telegram_promo_config import (
-    BUTTON_TEXT as PURCHASE_BUTTON_TEXT,
+    DEFAULT_BUTTON_TEXT,
     DEFAULT_PROMO_URL,
-    local_promo_url,
-    remote_promo_url,
+    local_promo,
+    remote_promo,
 )
 from telegram_publisher_control import remote_enabled
 
@@ -124,33 +124,46 @@ def add_subscription_button(payload: dict) -> dict:
     )
 
 
-def add_purchase_button(payload: dict, purchase_url: str) -> dict:
+def add_purchase_button(
+    payload: dict,
+    purchase_url: str,
+    purchase_text: str = DEFAULT_BUTTON_TEXT,
+) -> dict:
     return _append_url_button(
         payload,
-        text=PURCHASE_BUTTON_TEXT,
+        text=purchase_text,
         url=purchase_url,
     )
 
 
-def current_purchase_url() -> str:
-    """Read the freshest durable URL; fall back safely without blocking sends."""
+def current_purchase_promo() -> dict[str, str]:
+    """Read freshest durable URL + label; fall back safely without blocking sends."""
     try:
-        return remote_promo_url(".")
+        return remote_promo(".")
     except Exception as remote_exc:
         print(
-            f"[telegram-promo] remote URL read failed; using checkout fallback: {remote_exc}",
+            f"[telegram-promo] remote config read failed; using checkout fallback: {remote_exc}",
             file=sys.stderr,
             flush=True,
         )
         try:
-            return local_promo_url(".")
+            return local_promo(".")
         except Exception as local_exc:
             print(
-                f"[telegram-promo] local URL read failed; using built-in default: {local_exc}",
+                f"[telegram-promo] local config read failed; using built-in defaults: {local_exc}",
                 file=sys.stderr,
                 flush=True,
             )
-            return DEFAULT_PROMO_URL
+            return {"url": DEFAULT_PROMO_URL, "text": DEFAULT_BUTTON_TEXT}
+
+
+def current_purchase_url() -> str:
+    """Backwards-compatible helper retained for tests/external imports."""
+    return current_purchase_promo()["url"]
+
+
+def current_purchase_text() -> str:
+    return current_purchase_promo()["text"]
 
 
 def controlled_wait_until_next_slot(next_send_after: float) -> None:
@@ -202,17 +215,21 @@ def main() -> int:
         native_copy = _has_native_copy_button(decorated)
 
         purchase_url = ""
+        purchase_text = ""
         if config_chars:
             decorated = add_subscription_button(decorated)
-            purchase_url = current_purchase_url()
-            decorated = add_purchase_button(decorated, purchase_url)
+            promo = current_purchase_promo()
+            purchase_url = promo["url"]
+            purchase_text = promo["text"]
+            decorated = add_purchase_button(decorated, purchase_url, purchase_text)
 
             host = urlsplit(purchase_url).hostname or "unknown"
             print(
                 "[telegram-copy] preformatted=yes "
                 f"native_copy_button={'yes' if native_copy else 'no'} "
                 "subscription_button=yes purchase_button=yes "
-                f"purchase_host={host} config_chars={config_chars}",
+                f"purchase_host={host} purchase_text_chars={len(purchase_text)} "
+                f"config_chars={config_chars}",
                 flush=True,
             )
 

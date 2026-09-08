@@ -37,6 +37,7 @@ on:
       - "tests/test_telegram_bot_control_verified.py"
       - "tests/test_telegram_bot_sources.py"
       - "tests/test_telegram_promo.py"
+      - "tests/test_telegram_promo_text.py"
       - "tests/test_telegram_cycle_state.py"
       - "tests/test_telegram_publisher.py"
       - "tests/test_online_subscription.py"
@@ -68,6 +69,7 @@ on:
       - "tests/test_telegram_bot_control_verified.py"
       - "tests/test_telegram_bot_sources.py"
       - "tests/test_telegram_promo.py"
+      - "tests/test_telegram_promo_text.py"
       - "tests/test_telegram_cycle_state.py"
       - "tests/test_telegram_publisher.py"
       - "tests/test_online_subscription.py"
@@ -135,6 +137,7 @@ jobs:
             tests.test_telegram_bot_control_verified \
             tests.test_telegram_bot_sources \
             tests.test_telegram_promo \
+            tests.test_telegram_promo_text \
             tests.test_telegram_cycle_state \
             tests.test_telegram_publisher \
             tests.test_online_subscription \

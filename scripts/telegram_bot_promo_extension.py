@@ -1,9 +1,16 @@
-"""Extend Telegram Bot Control with purchase-CTA URL management."""
+"""Extend Telegram Bot Control with durable purchase-CTA URL + label management."""
 from __future__ import annotations
 
 from typing import Any, Callable
 
-from telegram_promo_config import DEFAULT_PROMO_URL, PROMO_PATH, normalize_promo_url
+from telegram_promo_config import (
+    DEFAULT_BUTTON_TEXT,
+    DEFAULT_PROMO_URL,
+    PROMO_PATH,
+    normalize_button_text,
+    normalize_promo_url,
+    promo_from_data,
+)
 
 _PENDING: dict[tuple[int, int, int | None], tuple[str, str]] = {}
 
@@ -20,31 +27,77 @@ def _pop(user_id: int, chat_id: int, thread_id: int | None) -> tuple[str, str]:
     return _PENDING.pop(_key(user_id, chat_id, thread_id), ("", ""))
 
 
-def _current_url(control: Any) -> str:
-    data = control.read_repo_json(PROMO_PATH, control.CONTROL_BRANCH, {"url": DEFAULT_PROMO_URL})
+def _current_promo(control: Any) -> dict[str, str]:
+    data = control.read_repo_json(
+        PROMO_PATH,
+        control.CONTROL_BRANCH,
+        {"url": DEFAULT_PROMO_URL, "text": DEFAULT_BUTTON_TEXT},
+    )
     try:
-        return normalize_promo_url(str(data.get("url") or ""))
+        return promo_from_data(data)
     except Exception as exc:
-        raise control.RetryableCommandError(f"invalid persisted purchase URL: {exc}") from exc
+        raise control.RetryableCommandError(f"invalid persisted purchase CTA config: {exc}") from exc
 
 
-def _set_url_verified(control: Any, value: str) -> tuple[bool, str]:
-    normalized = normalize_promo_url(value)
-    before = _current_url(control)
-    changed = before != normalized
-    if changed:
-        control.write_repo_json(
-            PROMO_PATH,
-            control.CONTROL_BRANCH,
-            {"url": normalized},
-            "chore: update Telegram purchase CTA URL via bot",
+def _persist_verified(control: Any, *, url: str, text: str, message: str) -> dict[str, str]:
+    expected = {
+        "url": normalize_promo_url(url),
+        "text": normalize_button_text(text),
+    }
+    control.write_repo_json(
+        PROMO_PATH,
+        control.CONTROL_BRANCH,
+        expected,
+        message,
+    )
+    persisted = _current_promo(control)
+    if persisted != expected:
+        raise control.RetryableCommandError(
+            "purchase CTA read-back did not match requested URL/text"
         )
-        persisted = _current_url(control)
-        if persisted != normalized:
-            raise control.RetryableCommandError(
-                "purchase CTA URL read-back did not match requested value"
-            )
-    return changed, normalized
+    return persisted
+
+
+def _set_url_verified(control: Any, value: str) -> tuple[bool, dict[str, str]]:
+    current = _current_promo(control)
+    normalized = normalize_promo_url(value)
+    changed = current["url"] != normalized
+    if not changed:
+        return False, current
+    persisted = _persist_verified(
+        control,
+        url=normalized,
+        text=current["text"],
+        message="chore: update Telegram purchase CTA URL via bot",
+    )
+    return True, persisted
+
+
+def _set_text_verified(control: Any, value: str) -> tuple[bool, dict[str, str]]:
+    current = _current_promo(control)
+    normalized = normalize_button_text(value)
+    changed = current["text"] != normalized
+    if not changed:
+        return False, current
+    persisted = _persist_verified(
+        control,
+        url=current["url"],
+        text=normalized,
+        message="chore: update Telegram purchase CTA label via bot",
+    )
+    return True, persisted
+
+
+def _settings_text(control: Any) -> str:
+    current = _current_promo(control)
+    return (
+        "🛒 تنظیمات دکمه خرید\n\n"
+        f"📝 نام دکمه: {current['text']}\n"
+        f"🔗 لینک: {current['url']}\n\n"
+        "برای تغییر در پیام خصوصی بات:\n"
+        "/buy_text متن جدید دکمه\n"
+        "/buy_link https://example.com/path"
+    )
 
 
 def install(control: Any) -> Callable[[], None]:
@@ -61,23 +114,26 @@ def install(control: Any) -> Callable[[], None]:
             for row in rows
             for button in row
         ):
-            rows.append([{"text": "🛒 لینک خرید", "callback_data": "promo:show"}])
+            rows.append([{"text": "🛒 تنظیمات خرید", "callback_data": "promo:show"}])
         return {"inline_keyboard": rows}
 
     def register_commands():
-        # Let previously-installed extensions register their commands first, then
-        # read back Telegram's effective command list and add ours without
-        # hard-coding the source-management command set here.
+        # Preserve commands registered by previously-installed extensions.
         original_register_commands()
         commands = control.telegram_api("getMyCommands", {})
         if not isinstance(commands, list):
             commands = []
+        ours = {"buy_button", "buy_link", "buy_text"}
         cleaned = [
             item for item in commands
-            if isinstance(item, dict) and str(item.get("command") or "") != "buy_link"
+            if isinstance(item, dict) and str(item.get("command") or "") not in ours
         ]
-        cleaned.append(
-            {"command": "buy_link", "description": "نمایش یا تغییر لینک دکمه خرید"}
+        cleaned.extend(
+            [
+                {"command": "buy_button", "description": "نمایش تنظیمات دکمه خرید"},
+                {"command": "buy_link", "description": "نمایش یا تغییر لینک دکمه خرید"},
+                {"command": "buy_text", "description": "نمایش یا تغییر نام دکمه خرید"},
+            ]
         )
         control.telegram_api("setMyCommands", {"commands": cleaned})
 
@@ -93,7 +149,7 @@ def install(control: Any) -> Callable[[], None]:
                 except (TypeError, ValueError):
                     return None, None, None, None, None
                 return (
-                    "promo_link",
+                    "promo_show",
                     user_id,
                     chat_id,
                     control.message_thread_id(message),
@@ -105,15 +161,22 @@ def install(control: Any) -> Callable[[], None]:
             sender = message.get("from")
             chat = message.get("chat")
             if isinstance(sender, dict) and isinstance(chat, dict):
-                text = str(message.get("text") or "").strip()
-                if control.normalize_command(text) == "/buy_link":
+                raw_text = str(message.get("text") or "").strip()
+                command = control.normalize_command(raw_text)
+                action_by_command = {
+                    "/buy_button": "promo_show",
+                    "/buy_link": "promo_link",
+                    "/buy_text": "promo_text",
+                }
+                action = action_by_command.get(command)
+                if action:
                     try:
                         user_id = int(sender.get("id"))
                         chat_id = int(chat.get("id"))
                     except (TypeError, ValueError):
                         return None, None, None, None, None
                     thread_id = control.message_thread_id(message)
-                    parts = text.split(maxsplit=1)
+                    parts = raw_text.split(maxsplit=1)
                     argument = parts[1].strip() if len(parts) > 1 else ""
                     _stash(
                         user_id,
@@ -122,12 +185,12 @@ def install(control: Any) -> Callable[[], None]:
                         argument,
                         str(chat.get("type") or ""),
                     )
-                    return "promo_link", user_id, chat_id, thread_id, None
+                    return action, user_id, chat_id, thread_id, None
 
         return original_update_to_action(update)
 
     def process_action(action, *, user_id, chat_id, thread_id, callback_id=None):
-        if action != "promo_link":
+        if action not in {"promo_show", "promo_link", "promo_text"}:
             return original_process_action(
                 action,
                 user_id=user_id,
@@ -141,22 +204,19 @@ def install(control: Any) -> Callable[[], None]:
                 control.answer_callback(callback_id, "فقط ادمین‌های گروه دسترسی دارند")
             control.safe_send_text(
                 chat_id,
-                "⛔ فقط ادمین‌های فعلی گروه Broute اجازه تغییر لینک خرید را دارند.",
+                "⛔ فقط ادمین‌های فعلی گروه Broute اجازه تغییر تنظیمات خرید را دارند.",
                 thread_id=thread_id,
             )
             return
 
         argument, chat_type = _pop(user_id, chat_id, thread_id)
-        if not argument:
-            current = _current_url(control)
+
+        if action == "promo_show" or not argument:
             if callback_id:
-                control.answer_callback(callback_id, "لینک خرید نمایش داده شد")
+                control.answer_callback(callback_id, "تنظیمات خرید نمایش داده شد")
             control.safe_send_text(
                 chat_id,
-                "🛒 لینک فعلی دکمه خرید:\n"
-                f"{current}\n\n"
-                "برای تغییر، در پیام خصوصی بات بفرست:\n"
-                "/buy_link https://example.com/path",
+                _settings_text(control),
                 thread_id=thread_id,
                 keyboard=menu_keyboard(),
             )
@@ -165,31 +225,38 @@ def install(control: Any) -> Callable[[], None]:
         if chat_type != "private":
             control.safe_send_text(
                 chat_id,
-                "🔐 برای تغییر لینک خرید، دستور /buy_link <url> را فقط در پیام خصوصی بات بفرست.",
+                "🔐 تغییر نام یا لینک دکمه خرید فقط در پیام خصوصی بات مجاز است.",
                 thread_id=thread_id,
             )
             return
 
         try:
-            changed, normalized = _set_url_verified(control, argument)
+            if action == "promo_link":
+                changed, persisted = _set_url_verified(control, argument)
+                label = "لینک"
+            else:
+                changed, persisted = _set_text_verified(control, argument)
+                label = "نام"
         except ValueError as exc:
             control.safe_send_text(
                 chat_id,
-                f"❌ لینک پذیرفته نشد: {exc}",
+                f"❌ مقدار پذیرفته نشد: {exc}",
                 thread_id=thread_id,
                 keyboard=menu_keyboard(),
             )
             return
         except Exception as exc:
             raise control.RetryableCommandError(
-                f"could not persist/verify purchase CTA URL: {exc}"
+                f"could not persist/verify purchase CTA config: {exc}"
             ) from exc
 
-        prefix = "✅ لینک دکمه خرید تغییر کرد." if changed else "ℹ️ همین لینک از قبل تنظیم بود."
+        prefix = f"✅ {label} دکمه خرید تغییر کرد." if changed else f"ℹ️ همین {label} از قبل تنظیم بود."
         control.safe_send_text(
             chat_id,
-            f"{prefix}\n\n🔗 {normalized}\n\n"
-            "پیام‌های بعدی کانفیگ از همین لینک استفاده می‌کنند.",
+            f"{prefix}\n\n"
+            f"📝 نام: {persisted['text']}\n"
+            f"🔗 لینک: {persisted['url']}\n\n"
+            "پیام‌های بعدی کانفیگ از همین تنظیمات استفاده می‌کنند.",
             thread_id=thread_id,
             keyboard=menu_keyboard(),
         )
