@@ -1,4 +1,4 @@
-trojan://humanity@185.75.243.102:443?path=%2Fassignment&security=tls&fragment=3%2C0-1%2Ctlshello&fm=%7B%22tcp%22%3A%5B%7B%22settings%22%3A%7B%22delay%22%3A%220-1%22%2C%22length%22%3A%223%22%2C%22packets%22%3A%22tlshello%22%7D%2C%22type%22%3A%22fragment%22%7D%5D%7D&insecure=0&host=www.ignitelimit.com&fp=chrome&type=ws&allo#%F0%9F%87%A6%F0%9F%87%B1%20Albania%20%7C%20%40xbroute
+trojan://MiTiVPN@91.193.58.201:443?path=%2FMiTiVPN%3DfL&security=tls&alpn=http%2F1.1&insecure=0&host=Fl.App-Cloud.ir&fp=firefox&type=ws&allowInsecure=0&sni=fl.App-Cloud.ir#%F0%9F%87%AC%F0%9F%87%A7%20United%20Kingdom%20%7C%20%40xbroute
 trojan://humanity@141.101.90.101:443?path=%2Fassignment&security=tls&insecure=0&fp=chrome&type=ws&allowInsecure=0&sni=www.ignitelimit.com#%F0%9F%87%A9%F0%9F%87%AA%20Germany%20%7C%20%40xbroute
 trojan://humanity@172.67.188.109:443?path=%2Fassignment&security=tls&insecure=0&fp=chrome&type=ws&allowInsecure=0&sni=www.ignitelimit.com#%F0%9F%87%A8%F0%9F%87%A6%20Canada%20%7C%20%40xbroute
 trojan://humanity@104.16.174.22:443?path=%2Fassignment&security=tls&insecure=0&host=www.ignitelimit.com&type=ws&allowInsecure=0&sni=www.ignitelimit.com#%F0%9F%87%A8%F0%9F%87%A6%20Canada%20%7C%20%40xbroute
@@ -59,3 +59,6 @@ trojan://humanity@104.16.174.117:443?path=%2Fassignment&security=tls&insecure=0&
 trojan://humanity@212.227.144.37:8443?path=%2Fassignment&security=tls&alpn=v2rayNplus--v2rayNplus--v2rayNplus--v2rayNplus--v2rayNplus--v2rayNplus--v2rayNplus--v2rayNplus&insecure=0&host=www.calmlunch.com&type=ws&allowInsecure=0&sni=www.calmlunch.com#%F0%9F%87%AA%F0%9F%87%B8%20Spain%20%7C%20%40xbroute
 trojan://humanity@5.181.187.58:443?path=%2Fassignment&security=tls&insecure=0&host=www.calmlunch.com&type=ws&allowInsecure=0&sni=www.calmlunch.com#%F0%9F%87%A9%F0%9F%87%AA%20Germany%20%7C%20%40xbroute
 trojan://humanity@185.220.100.168:443?security=tls&sni=www.calmlunch.com&type=ws&host=www.calmlunch.com&path=%2Fassignment#%F0%9F%87%A9%F0%9F%87%AA%20Germany%20%7C%20%40xbroute
+trojan://humanity@172.67.149.60:443?path=%2Fassignment&security=tls&insecure=0&type=ws&allowInsecure=0&sni=www.ignitelimit.com#%F0%9F%87%A8%F0%9F%87%A6%20Canada%20%7C%20%40xbroute
+trojan://humanity@130.250.137.171:443?security=tls&sni=www.ignitelimit.com&ech=ip.gs%2Budp%3A%2F%2F8.8.8.8&type=ws&host=www.ignitelimit.com&path=%2Fassignment#%F0%9F%87%BA%F0%9F%87%B8%20United%20States%20%7C%20%40xbroute
+trojan://humanity@188.114.97.7:443?path=%2Fassignment&security=tls&insecure=0&type=ws&allowInsecure=0&sni=www.ignitelimit.com#%F0%9F%87%A8%F0%9F%87%A6%20Canada%20%7C%20%40xbroute
