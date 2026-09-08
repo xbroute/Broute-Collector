@@ -9,6 +9,8 @@ on:
       - "scripts/telegram_publisher.py"
       - "scripts/telegram_publisher_control.py"
       - "scripts/telegram_publisher_controlled.py"
+      - "scripts/telegram_copy_format.py"
+      - "scripts/telegram_promo_config.py"
       - "scripts/telegram_bot_control.py"
       - ".github/telegram-publisher-control.json"
       - ".github/workflows/publish-telegram.yml"
