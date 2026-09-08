@@ -10,9 +10,12 @@ PROMO_PATH = os.environ.get(
     "TELEGRAM_PUBLISHER_PROMO_PATH",
     ".github/telegram-publisher-promo.json",
 )
-BUTTON_TEXT = "خرید اشتراک پرسرعت و بدون قطعی"
+DEFAULT_BUTTON_TEXT = "خرید اشتراک پرسرعت و بدون قطعی"
+# Backwards-compatible alias for older imports/tests.
+BUTTON_TEXT = DEFAULT_BUTTON_TEXT
 DEFAULT_PROMO_URL = "https://t.me/xbroutebot"
 MAX_URL_CHARS = 2048
+MAX_BUTTON_TEXT_CHARS = 96
 
 
 def normalize_promo_url(value: str) -> str:
@@ -53,20 +56,62 @@ def normalize_promo_url(value: str) -> str:
     )
 
 
-def promo_url_from_data(data: object) -> str:
+def normalize_button_text(value: str) -> str:
+    """Validate a compact, single-line Telegram purchase-button label."""
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("purchase button text must not be empty")
+    if any(ord(ch) < 32 for ch in text) or "\n" in text or "\r" in text:
+        raise ValueError("purchase button text must be a single line")
+    if len(text) > MAX_BUTTON_TEXT_CHARS:
+        raise ValueError(
+            f"purchase button text exceeds {MAX_BUTTON_TEXT_CHARS} characters"
+        )
+    return text
+
+
+def promo_from_data(data: object) -> dict[str, str]:
+    """Read URL + label with backwards compatibility for old URL-only JSON."""
     if not isinstance(data, dict):
         raise ValueError("promo config must be a JSON object")
-    return normalize_promo_url(str(data.get("url") or ""))
+    return {
+        "url": normalize_promo_url(str(data.get("url") or DEFAULT_PROMO_URL)),
+        "text": normalize_button_text(str(data.get("text") or DEFAULT_BUTTON_TEXT)),
+    }
+
+
+def promo_from_text(text: str) -> dict[str, str]:
+    return promo_from_data(json.loads(text))
+
+
+def promo_url_from_data(data: object) -> str:
+    return promo_from_data(data)["url"]
 
 
 def promo_url_from_text(text: str) -> str:
-    return promo_url_from_data(json.loads(text))
+    return promo_from_text(text)["url"]
+
+
+def promo_button_text_from_data(data: object) -> str:
+    return promo_from_data(data)["text"]
+
+
+def promo_button_text_from_text(text: str) -> str:
+    return promo_from_text(text)["text"]
+
+
+def local_promo(repo_dir: str = ".") -> dict[str, str]:
+    path = os.path.join(repo_dir, PROMO_PATH)
+    with open(path, "r", encoding="utf-8") as f:
+        return promo_from_text(f.read())
 
 
 def local_promo_url(repo_dir: str = ".") -> str:
-    path = os.path.join(repo_dir, PROMO_PATH)
-    with open(path, "r", encoding="utf-8") as f:
-        return promo_url_from_text(f.read())
+    return local_promo(repo_dir)["url"]
+
+
+def local_button_text(repo_dir: str = ".") -> str:
+    return local_promo(repo_dir)["text"]
 
 
 def _git(args: list[str], cwd: str, timeout: int = 20) -> subprocess.CompletedProcess:
@@ -79,7 +124,7 @@ def _git(args: list[str], cwd: str, timeout: int = 20) -> subprocess.CompletedPr
     )
 
 
-def remote_promo_url(repo_dir: str = ".") -> str:
+def remote_promo(repo_dir: str = ".") -> dict[str, str]:
     fetched = _git(["fetch", "origin", "main", "--quiet"], repo_dir)
     if fetched.returncode != 0:
         raise RuntimeError(fetched.stderr.strip() or "git fetch failed")
@@ -88,4 +133,12 @@ def remote_promo_url(repo_dir: str = ".") -> str:
     if shown.returncode != 0:
         raise RuntimeError(shown.stderr.strip() or "git show failed")
 
-    return promo_url_from_text(shown.stdout)
+    return promo_from_text(shown.stdout)
+
+
+def remote_promo_url(repo_dir: str = ".") -> str:
+    return remote_promo(repo_dir)["url"]
+
+
+def remote_button_text(repo_dir: str = ".") -> str:
+    return remote_promo(repo_dir)["text"]
