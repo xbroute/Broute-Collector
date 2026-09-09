@@ -4,16 +4,16 @@
   "offline_configs": 388,
   "unknown_configs": 0,
   "removed_configs": 330,
-  "secure_configs": 1012,
+  "secure_configs": 1005,
   "countries": 46,
   "active_sources": 33,
-  "last_update": "2026-09-09T11:29:26Z",
+  "last_update": "2026-09-09T11:53:17Z",
   "validation": {
     "budget": 500,
     "candidates": 1299,
     "selected": 500,
     "deferred": 799,
-    "new_unvalidated": 29,
+    "new_unvalidated": 18,
     "validator_errors": 0,
     "validated_successfully": 500
   }
