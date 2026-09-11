@@ -1,19 +1,19 @@
 {
-  "total_configs": 1110,
-  "online_configs": 865,
-  "offline_configs": 245,
+  "total_configs": 1117,
+  "online_configs": 863,
+  "offline_configs": 254,
   "unknown_configs": 0,
-  "removed_configs": 199,
+  "removed_configs": 208,
   "secure_configs": 856,
-  "countries": 43,
+  "countries": 44,
   "active_sources": 32,
-  "last_update": "2026-09-11T13:12:23Z",
+  "last_update": "2026-09-11T13:35:38Z",
   "validation": {
     "budget": 500,
-    "candidates": 1110,
+    "candidates": 1117,
     "selected": 500,
-    "deferred": 610,
-    "new_unvalidated": 8,
+    "deferred": 617,
+    "new_unvalidated": 19,
     "validator_errors": 0,
     "validated_successfully": 500
   }
