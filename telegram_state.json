@@ -1417,6 +1417,7 @@
     "37a3b07584006b20",
     "37af6f213a99577c",
     "37b482978192e80d",
+    "37bbdba3cd6cb2f1",
     "37c04a2f1597cb4d",
     "37c639ef8f337f69",
     "37d137e88f5fc6e2",
@@ -6389,6 +6390,7 @@
     "0006e5d88e22a628e2d5468d",
     "0006f87bd770168aac43e1e8",
     "0010b9a443ceadf7ce5f8320",
+    "001353f4e46868b7d0506ded",
     "0014fb44935f93eeed04a541",
     "00161ee7ce795fadde838fa9",
     "0019a15fe601a8c15ab91d8f",
@@ -12534,6 +12536,7 @@
     "35d0dc17f8879e3f",
     "35da9e12ff52062c",
     "3752d0a149f568d9",
+    "37bbdba3cd6cb2f1",
     "37fe841c0aa47ccf",
     "38b6feace203e5b2",
     "38fbfec66d2bd4c6",
@@ -12832,6 +12835,7 @@
     "ffe6e7874295f600"
   ],
   "cycle_sent_fingerprints": [
+    "001353f4e46868b7d0506ded",
     "006b0b96f2776a8abb120833",
     "01cd0d0acd16b78c58d0d045",
     "02782e30d47bb81d23cf46d9",
@@ -13216,7 +13220,6 @@
     "ffb73acc9ce6ee698508ea62"
   ],
   "queue": [
-    "37bbdba3cd6cb2f1",
     "c934ff1acafa72b8",
     "ecff5ce371b86cc2",
     "4bacb60c8326306f",
@@ -13892,6 +13895,6 @@
     "246ce690697ae4ac",
     "0c11a06f9eea92f9"
   ],
-  "next_send_after": 1789292747,
+  "next_send_after": 1789292805,
   "cycle_started_at": "2026-09-13T02:27:05Z"
 }
