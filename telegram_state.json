@@ -15484,15 +15484,16 @@
   "cycle_sent": [
     "1a85b4594611212f",
     "242264ed0613e6a8",
-    "6314738aab9be741"
+    "6314738aab9be741",
+    "bd4c79274203ca68"
   ],
   "cycle_sent_fingerprints": [
     "752643a11485da329bb3a404",
+    "c00a4ebffd57d3d2dbe335d3",
     "e0aa66d3328da62ac280f79e",
     "f5079f17dee5bf7256036548"
   ],
   "queue": [
-    "bd4c79274203ca68",
     "c530d6ef1a3d0df7",
     "0e5120a7ac28693b",
     "53179b4c585865df",
@@ -16383,6 +16384,6 @@
     "9e76eb3d3578d9d1",
     "518583738d0da6c4"
   ],
-  "next_send_after": 1789478595,
+  "next_send_after": 1789478678,
   "cycle_started_at": "2026-09-15T13:19:17Z"
 }
