@@ -1,6 +1,5 @@
 trojan://MiTiVPN@151.101.56.6:443?path=%2F&security=tls&alpn=http%2F1.1&insecure=0&host=mitivpn---ss--s---mitivpn-66e.global.ssl.fastly.net&fp=chrome&type=ws&allowInsecure=0&sni=ssl.fastly.com#%F0%9F%87%BA%F0%9F%87%B8%20United%20States%20%7C%20%40xbroute
 trojan://8815d654-7115-41c2-ae1a-4bb54e4995ca@147.135.128.19:20143?path=%2Fknight-trojan&security=none&host=147.135.128.19&type=ws#%F0%9F%87%AB%F0%9F%87%B7%20France%20%7C%20%40xbroute
-trojan://moist@116.47.10.236:27335?allowInsecure=1&sni=trojan.freenods.sbs&ws=1&wspath=%2F#%F0%9F%87%B0%F0%9F%87%B7%20South%20Korea%20%7C%20%40xbroute
 trojan://humanity@render.com:443?path=%2Fassignment&security=tls&insecure=0&host=www.ignitelimit.com&ech=ip.gs%2Budp%3A%2F%2F8.8.8.8&type=ws&allowInsecure=0&sni=www.ignitelimit.com#%F0%9F%87%BA%F0%9F%87%B8%20United%20States%20%7C%20%40xbroute
 trojan://humanity@188.114.97.7:443?path=%2Fassignment&security=tls&insecure=0&ech=ip.gs%2Budp%3A%2F%2F8.8.8.8&type=ws&allowInsecure=0&sni=www.ignitelimit.com#%F0%9F%87%A8%F0%9F%87%A6%20Canada%20%7C%20%40xbroute
 trojan://humanity@188.114.97.7:443?security=tls&sni=www.ignitelimit.com&ech=ip.gs%2Budp%3A%2F%2F8.8.8.8&type=ws&path=%2Fassignment#%F0%9F%87%A8%F0%9F%87%A6%20Canada%20%7C%20%40xbroute
@@ -40,9 +39,6 @@ trojan://humanity@104.21.46.3:443?path=%2Fassignment&security=tls&alpn=h3%2Ch2%2
 trojan://humanity@www.speedtest.net:443?path=%2Fassignment&security=tls&insecure=0&host=www.ignitelimit.com&ech=ip.gs%2Budp%3A%2F%2F8.8.8.8&type=ws&allowInsecure=0&sni=www.ignitelimit.com#%F0%9F%87%A8%F0%9F%87%A6%20Canada%20%7C%20%40xbroute
 trojan://r7sfH0LhLtubR_bdakGtDmAAqRKTQcV2@chelyabinsk.gosgenarchive.com:448?mode=gun&security=tls&alpn=h2&insecure=0&fp=firefox&type=grpc&serviceName=TrojanGRPC&allowInsecure=0&sni=chelyabinsk.gosgenarchive.com#%F0%9F%87%A9%F0%9F%87%AA%20Germany%20%7C%20%40xbroute
 trojan://skynet@cloud.lakshan.us:119?security=tls&insecure=1&headerType=none&fp=chrome&type=tcp&allowInsecure=1&sni=cloud.lakshan.us#%F0%9F%87%B8%F0%9F%87%AC%20Singapore%20%7C%20%40xbroute
-trojan://telegram-id-directvpn@15.237.242.27:22222?security=tls&alpn=http/1.1&headerType=none&type=tcp&sni=trojan.burgerip.co.uk#%F0%9F%87%AB%F0%9F%87%B7%20France%20%7C%20%40xbroute
-trojan://telegram-id-directvpn@18.175.78.88:22222?security=tls&alpn=http/1.1&headerType=none&type=tcp&sni=trojan.burgerip.co.uk#%F0%9F%87%AC%F0%9F%87%A7%20United%20Kingdom%20%7C%20%40xbroute
-trojan://telegram-id-directvpn@3.66.144.206:22222?security=tls&alpn=http/1.1&headerType=none&type=tcp&sni=trojan.burgerip.co.uk#%F0%9F%87%A9%F0%9F%87%AA%20Germany%20%7C%20%40xbroute
 trojan://humanity@188.42.145.180:443?path=%2Fassignment&security=tls&alpn=http%2F1.1&insecure=0&host=www.volumeroot.com&fp=chrome&type=ws&allowInsecure=0&sni=www.volumeroot.com#%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%7C%20%40xbroute
 trojan://humanity@216.24.57.7:443?path=%2Fassignment&security=tls&alpn=http%2F1.1&insecure=0&host=www.ignitelimit.com&fp=chrome&type=ws&allowInsecure=0&sni=www.ignitelimit.com#%F0%9F%87%BA%F0%9F%87%B8%20United%20States%20%7C%20%40xbroute
 trojan://humanity@188.42.145.180:443?security=tls&sni=www.volumeroot.com&fp=chrome&alpn=http%2F1.1&type=ws&host=www.volumeroot.com&path=%2Fassignment#%F0%9F%87%B3%F0%9F%87%B1%20The%20Netherlands%20%7C%20%40xbroute
