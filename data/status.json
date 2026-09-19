@@ -3,17 +3,17 @@
   "online_configs": 1071,
   "offline_configs": 219,
   "unknown_configs": 0,
-  "removed_configs": 195,
-  "secure_configs": 1003,
+  "removed_configs": 197,
+  "secure_configs": 1001,
   "countries": 49,
   "active_sources": 31,
-  "last_update": "2026-09-19T08:54:53Z",
+  "last_update": "2026-09-19T08:57:20Z",
   "validation": {
     "budget": 500,
     "candidates": 1290,
     "selected": 500,
     "deferred": 790,
-    "new_unvalidated": 30,
+    "new_unvalidated": 2,
     "validator_errors": 0,
     "validated_successfully": 500
   }
