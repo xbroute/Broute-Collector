@@ -28,6 +28,7 @@ on:
       - "scripts/telegram_multidestination_publisher.py"
       - "scripts/telegram_copy_format.py"
       - "tests/test_telegram_destinations.py"
+      - "tests/test_telegram_destination_control.py"
       - "tests/test_telegram_multidestination.py"
       - "tests/test_telegram_bot_control.py"
       - "tests/test_telegram_bot_control_verified.py"
@@ -121,6 +122,7 @@ jobs:
             tests.test_telegram_cycle_state \
             tests.test_telegram_publisher \
             tests.test_telegram_destinations \
+            tests.test_telegram_destination_control \
             tests.test_telegram_multidestination \
             tests.test_online_subscription \
             tests.test_fair_validation -v
