@@ -45,6 +45,7 @@ ALLOWED_TEMPLATE_FIELDS = {
     "config",
     "brand",
     "subscription_url",
+    "destination",
 }
 
 _INTERVAL_RE = re.compile(
