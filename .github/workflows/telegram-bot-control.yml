@@ -49,6 +49,8 @@ on:
       - "tests/test_fair_validation.py"
       - "requirements.txt"
       - ".github/workflows/telegram-bot-control.yml"
+      - ".github/workflows/publish-telegram.yml"
+      - ".github/workflows/telegram-watchdog.yml"
   pull_request:
     branches:
       - main
@@ -86,6 +88,8 @@ on:
       - "tests/test_fair_validation.py"
       - "requirements.txt"
       - ".github/workflows/telegram-bot-control.yml"
+      - ".github/workflows/publish-telegram.yml"
+      - ".github/workflows/telegram-watchdog.yml"
 
 permissions:
   contents: write
