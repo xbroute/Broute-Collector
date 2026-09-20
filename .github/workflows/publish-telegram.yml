@@ -9,9 +9,10 @@ on:
       - "scripts/telegram_publisher.py"
       - "scripts/telegram_publisher_control.py"
       - "scripts/telegram_publisher_controlled.py"
+      - "scripts/telegram_multidestination_publisher.py"
+      - "scripts/telegram_destinations.py"
       - "scripts/telegram_copy_format.py"
       - "scripts/telegram_promo_config.py"
-      - "scripts/telegram_bot_control.py"
       - ".github/telegram-publisher-control.json"
       - ".github/workflows/publish-telegram.yml"
 
@@ -42,8 +43,7 @@ jobs:
 
       - name: Publisher is OFF
         if: steps.publisher_control.outputs.enabled != 'true'
-        run: |
-          echo "Telegram publisher is OFF. No Telegram state is changed and no successor run will be created."
+        run: echo "Telegram publisher is OFF. No state is changed."
 
       - name: Checkout persistent Telegram state
         if: steps.publisher_control.outputs.enabled == 'true'
@@ -52,11 +52,23 @@ jobs:
           ref: telegram-state
           path: state
 
+      - name: Checkout encrypted Telegram destination state
+        if: steps.publisher_control.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: telegram-bot-state
+          path: botstate
+
       - name: Set up Python
         if: steps.publisher_control.outputs.enabled == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
+      - name: Install dependencies
+        if: steps.publisher_control.outputs.enabled == 'true'
+        working-directory: app
+        run: pip install -r requirements.txt
 
       - name: Check collector freshness
         id: collector_freshness
@@ -64,27 +76,20 @@ jobs:
         working-directory: app
         run: |
           python - <<'PY'
-          import json
-          import os
+          import json, os
           from datetime import datetime, timezone
-
-          stale = True
-          age = -1
+          stale, age = True, -1
           try:
               with open("data/status.json", "r", encoding="utf-8") as f:
                   status = json.load(f)
-              value = str(status.get("last_update") or "").strip()
-              stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+              stamp = datetime.fromisoformat(str(status.get("last_update") or "").replace("Z", "+00:00"))
               age = max(0, int((datetime.now(timezone.utc) - stamp).total_seconds()))
               stale = age > 20 * 60
           except Exception as exc:
               print(f"Collector freshness check failed: {exc}")
-              stale = True
-
           with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
               f.write(f"stale={'true' if stale else 'false'}\n")
               f.write(f"age_seconds={age}\n")
-
           print(f"Collector age: {age}s; stale={stale}")
           PY
 
@@ -93,23 +98,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "::warning::Collector snapshot is stale. A refresh is being requested, but Telegram publishing will continue with per-config live validation."
           for attempt in 1 2 3; do
-            if curl --fail-with-body --silent --show-error \
-              --request POST \
-              --header "Accept: application/vnd.github+json" \
-              --header "Authorization: Bearer ${GH_TOKEN}" \
-              --header "X-GitHub-Api-Version: 2022-11-28" \
-              --header "Content-Type: application/json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/update-subscription.yml/dispatches" \
-              --data '{"ref":"main"}'; then
-              echo "Fresh collector run dispatched; publisher continues independently."
+            if curl --fail-with-body --silent --show-error               --request POST               --header "Accept: application/vnd.github+json"               --header "Authorization: Bearer ${GH_TOKEN}"               --header "X-GitHub-Api-Version: 2022-11-28"               --header "Content-Type: application/json"               "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/update-subscription.yml/dispatches"               --data '{"ref":"main"}'; then
               exit 0
             fi
-            echo "Collector dispatch attempt ${attempt} failed; retrying..."
             sleep $((attempt * 5))
           done
-          echo "::warning::Collector refresh dispatch failed after 3 attempts. Live validation still protects Telegram sends."
+          echo "::warning::Collector refresh dispatch failed; live validation remains active."
           exit 0
 
       - name: Publish queued live configs
@@ -119,17 +114,16 @@ jobs:
         working-directory: app
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_SOURCE_ENCRYPTION_KEY: ${{ secrets.TELEGRAM_SOURCE_ENCRYPTION_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
-          TELEGRAM_CONTROL_CHAT_ID: "-1004469276021"
-          TELEGRAM_CHAT_ID: "-1004469276021"
-          TELEGRAM_TOPIC_ID: "1944"
+          TELEGRAM_DESTINATION_STATE_PATH: "../botstate/telegram_destinations.json"
           TELEGRAM_STATE_PATH: "../state/telegram_state.json"
           TELEGRAM_RUN_BUDGET_SECONDS: ${{ github.event_name == 'push' && '150' || '540' }}
           TELEGRAM_LIVE_CHECK_RETRIES: "2"
           TELEGRAM_STATE_PUSH_RETRIES: "5"
           TELEGRAM_REQUEST_RETRIES: "4"
           TELEGRAM_CONTROL_CHECK_INTERVAL_SECONDS: "5"
-          TELEGRAM_BOT_POLL_INTERVAL_SECONDS: "5"
+          TELEGRAM_DESTINATION_REFRESH_SECONDS: "10"
         run: python scripts/telegram_publisher_controlled.py
 
       - name: Final Telegram state safety push
@@ -138,21 +132,14 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
           git add telegram_state.json
           if ! git diff --cached --quiet; then
             git commit -m "chore: final Telegram state checkpoint [automated]"
           fi
-
           for attempt in 1 2 3 4 5; do
-            if git push origin HEAD:telegram-state; then
-              exit 0
-            fi
-            echo "Final state push attempt ${attempt} failed; retrying..."
+            if git push origin HEAD:telegram-state; then exit 0; fi
             sleep $((attempt * 3))
           done
-
-          echo "Failed to persist final Telegram state after 5 attempts." >&2
           exit 1
 
       - name: Re-check publisher control after run
@@ -166,40 +153,39 @@ jobs:
         if: steps.publisher_control.outputs.enabled == 'true' && steps.telegram_publish.outcome == 'success'
         working-directory: state
         run: |
-          pending=$(python -c 'import json; data=json.load(open("telegram_state.json", encoding="utf-8")); print(len(data.get("queue", [])))')
-          echo "pending=${pending}" >> "$GITHUB_OUTPUT"
-          echo "Pending Telegram configs: ${pending}"
+          python - <<'PY'
+          import json, os, time
+          with open("telegram_state.json", encoding="utf-8") as f:
+              data = json.load(f)
+          pending = int(data.get("pending_total", 0) or 0)
+          due = int(data.get("next_due_after", 0) or 0)
+          due_in = max(0, due - int(time.time())) if due else 0
+          dispatch_now = pending > 0 and due_in <= 600
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"pending={pending}\n")
+              out.write(f"due_in={due_in}\n")
+              out.write(f"dispatch_now={'true' if dispatch_now else 'false'}\n")
+          print(f"Pending={pending}; due_in={due_in}s; dispatch_now={dispatch_now}")
+          PY
 
       - name: Continue Telegram backlog
-        if: steps.publisher_control.outputs.enabled == 'true' && steps.telegram_publish.outcome == 'success' && steps.publisher_control_after.outputs.enabled == 'true' && steps.telegram_backlog.outputs.pending != '0'
+        if: steps.publisher_control.outputs.enabled == 'true' && steps.telegram_publish.outcome == 'success' && steps.publisher_control_after.outputs.enabled == 'true' && steps.telegram_backlog.outputs.dispatch_now == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Backlog remains and publisher is still ON; dispatching exactly one successor publisher run."
           for attempt in 1 2 3 4 5; do
-            if curl --fail-with-body --silent --show-error \
-              --request POST \
-              --header "Accept: application/vnd.github+json" \
-              --header "Authorization: Bearer ${GH_TOKEN}" \
-              --header "X-GitHub-Api-Version: 2022-11-28" \
-              --header "Content-Type: application/json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/publish-telegram.yml/dispatches" \
-              --data '{"ref":"main"}'; then
-              echo "Next publisher run dispatched successfully."
+            if curl --fail-with-body --silent --show-error               --request POST               --header "Accept: application/vnd.github+json"               --header "Authorization: Bearer ${GH_TOKEN}"               --header "X-GitHub-Api-Version: 2022-11-28"               --header "Content-Type: application/json"               "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/publish-telegram.yml/dispatches"               --data '{"ref":"main"}'; then
               exit 0
             fi
-            echo "Publisher dispatch attempt ${attempt} failed; retrying..."
             sleep $((attempt * 3))
           done
-          echo "::warning::Could not self-dispatch after 5 attempts. The external watchdog will recover the backlog while publishing remains ON."
+          echo "::warning::Self-dispatch failed; watchdog will recover due backlog."
           exit 0
 
       - name: Confirm graceful OFF during run
         if: steps.publisher_control.outputs.enabled == 'true' && steps.telegram_publish.outcome == 'success' && steps.publisher_control_after.outputs.enabled == 'false'
-        run: |
-          echo "Publisher was switched OFF during this run. No successor run will be created; durable queue/state is preserved."
+        run: echo "Publisher was switched OFF; destination queues are preserved."
 
       - name: Warn if Telegram publishing failed
         if: steps.publisher_control.outputs.enabled == 'true' && steps.telegram_publish.outcome == 'failure'
-        run: |
-          echo "::warning::Telegram publisher failed. Durable checkpoints limit duplicate risk; the external watchdog will retry later only while publishing is ON."
+        run: echo "::warning::Telegram publisher failed; durable destination state is preserved."
