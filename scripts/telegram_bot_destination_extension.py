@@ -553,16 +553,56 @@ def install(control: Any) -> Callable[[], None]:
             return
 
     def status_text():
-        text = original_status_text()
         try:
-            state = _load(control)
-            active = len(active_destinations(state))
-            total = len(state.get("destinations", []))
-            low = state.get("default_min_delay")
-            high = state.get("default_max_delay")
-            return f"{text}\n📡 مقصد فعال: {active}/{total}\n⏱ فاصله پیش‌فرض: {low}–{high} ثانیه"
+            registry = _load(control)
+            active_count = len(active_destinations(registry))
+            total = len(registry.get("destinations", []))
+            low = registry.get("default_min_delay")
+            high = registry.get("default_max_delay")
+
+            publisher_state = control.read_repo_json(
+                control.PUBLISHER_STATE_PATH,
+                control.PUBLISHER_STATE_BRANCH,
+                {"version": 2, "destinations": {}, "pending_total": 0},
+            )
+            target_states = publisher_state.get("destinations", {})
+            delivered = 0
+            if isinstance(target_states, dict):
+                for target in target_states.values():
+                    if isinstance(target, dict) and isinstance(target.get("sent"), list):
+                        delivered += len(target["sent"])
+            pending = int(publisher_state.get("pending_total", 0) or 0)
+
+            try:
+                from telegram_managed_sources import (
+                    SOURCE_STATE_BRANCH,
+                    SOURCE_STATE_PATH,
+                    decrypt_sources,
+                )
+                source_payload = control.read_repo_json(
+                    SOURCE_STATE_PATH,
+                    SOURCE_STATE_BRANCH,
+                    {},
+                )
+                source_count = len(decrypt_sources(source_payload))
+                source_text = str(source_count)
+            except Exception:
+                source_text = "نامشخص"
+
+            enabled = control.current_enabled()
+            runs = control.publisher_run_count()
+            return (
+                f"{'🟢' if enabled else '🔴'} انتشار کلی: "
+                f"{'روشن' if enabled else 'خاموش'}\n\n"
+                f"📡 مقصد فعال: {active_count}/{total}\n"
+                f"⏱ فاصله پیش‌فرض: {low}–{high} ثانیه\n"
+                f"📤 تحویل ثبت‌شده بین مقصدها: {delivered}\n"
+                f"⏳ مجموع در صف مقصدهای فعال: {pending}\n"
+                f"📚 منابع اضافه از بات: {source_text}\n"
+                f"⚙️ Run فعال/منتظر: {runs}"
+            )
         except Exception:
-            return f"{text}\n📡 مقصدها: نامشخص"
+            return "⚠️ وضعیت مقصدها موقتاً قابل خواندن نیست."
 
     control.update_to_action = update_to_action
     control.process_action = process_action
