@@ -17,6 +17,9 @@ on:
       - main
     paths:
       - "scripts/telegram_bot_control.py"
+      - "scripts/telegram_bot_destination_extension.py"
+      - "scripts/telegram_destinations.py"
+      - "scripts/telegram_multi_publisher.py"
       - "scripts/telegram_bot_control_verified.py"
       - "scripts/telegram_bot_control_full.py"
       - "scripts/telegram_bot_source_extension.py"
@@ -34,6 +37,8 @@ on:
       - "scripts/deduplicator.py"
       - "scripts/validation_scheduler.py"
       - "tests/test_telegram_bot_control.py"
+      - "tests/test_telegram_destinations.py"
+      - "tests/test_telegram_multi_publisher.py"
       - "tests/test_telegram_bot_control_verified.py"
       - "tests/test_telegram_bot_sources.py"
       - "tests/test_telegram_promo.py"
@@ -44,11 +49,16 @@ on:
       - "tests/test_fair_validation.py"
       - "requirements.txt"
       - ".github/workflows/telegram-bot-control.yml"
+      - ".github/workflows/publish-telegram.yml"
+      - ".github/workflows/telegram-watchdog.yml"
   pull_request:
     branches:
       - main
     paths:
       - "scripts/telegram_bot_control.py"
+      - "scripts/telegram_bot_destination_extension.py"
+      - "scripts/telegram_destinations.py"
+      - "scripts/telegram_multi_publisher.py"
       - "scripts/telegram_bot_control_verified.py"
       - "scripts/telegram_bot_control_full.py"
       - "scripts/telegram_bot_source_extension.py"
@@ -66,6 +76,8 @@ on:
       - "scripts/deduplicator.py"
       - "scripts/validation_scheduler.py"
       - "tests/test_telegram_bot_control.py"
+      - "tests/test_telegram_destinations.py"
+      - "tests/test_telegram_multi_publisher.py"
       - "tests/test_telegram_bot_control_verified.py"
       - "tests/test_telegram_bot_sources.py"
       - "tests/test_telegram_promo.py"
@@ -76,6 +88,8 @@ on:
       - "tests/test_fair_validation.py"
       - "requirements.txt"
       - ".github/workflows/telegram-bot-control.yml"
+      - ".github/workflows/publish-telegram.yml"
+      - ".github/workflows/telegram-watchdog.yml"
 
 permissions:
   contents: write
@@ -112,6 +126,9 @@ jobs:
         run: |
           python -m py_compile \
             scripts/telegram_bot_control.py \
+            scripts/telegram_bot_destination_extension.py \
+            scripts/telegram_destinations.py \
+            scripts/telegram_multi_publisher.py \
             scripts/telegram_bot_control_verified.py \
             scripts/telegram_bot_control_full.py \
             scripts/telegram_bot_source_extension.py \
@@ -134,6 +151,8 @@ jobs:
         run: |
           python -m unittest \
             tests.test_telegram_bot_control \
+            tests.test_telegram_destinations \
+            tests.test_telegram_multi_publisher \
             tests.test_telegram_bot_control_verified \
             tests.test_telegram_bot_sources \
             tests.test_telegram_promo \
@@ -143,22 +162,21 @@ jobs:
             tests.test_online_subscription \
             tests.test_fair_validation -v
 
-      - name: Verify Telegram admin authorization path
+      - name: Verify Telegram Bot API path
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           GITHUB_TOKEN: ${{ github.token }}
-          TELEGRAM_CONTROL_CHAT_ID: "-1004469276021"
         run: |
           python - <<'PY'
           import sys
           sys.path.insert(0, "scripts")
           import telegram_bot_control as control
 
-          admins = control.current_admin_ids()
-          if not admins:
-              raise SystemExit("Telegram returned no human administrators for the target group")
-          print(f"Telegram admin authorization preflight passed: {len(admins)} human admin(s) visible")
+          me = control.telegram_api("getMe", {})
+          if not isinstance(me, dict) or not me.get("id"):
+              raise SystemExit("Telegram getMe returned an invalid bot identity")
+          print("Telegram Bot API preflight passed.")
           PY
 
       - name: Process Telegram publisher commands
@@ -166,6 +184,6 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_SOURCE_ENCRYPTION_KEY: ${{ secrets.TELEGRAM_SOURCE_ENCRYPTION_KEY }}
+          TELEGRAM_DESTINATION_ENCRYPTION_KEY: ${{ secrets.TELEGRAM_DESTINATION_ENCRYPTION_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
-          TELEGRAM_CONTROL_CHAT_ID: "-1004469276021"
         run: python scripts/telegram_bot_control_full.py

@@ -37,9 +37,56 @@ jobs:
         run: |
           echo "Telegram publisher is OFF. Watchdog intentionally does not dispatch anything."
 
+      - name: Checkout encrypted Telegram destination state
+        if: steps.publisher_control.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: telegram-bot-state
+          path: botstate
+          fetch-depth: 1
+
+      - name: Check for enabled Telegram destinations
+        id: destination_activity
+        if: steps.publisher_control.outputs.enabled == 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_SOURCE_ENCRYPTION_KEY: ${{ secrets.TELEGRAM_SOURCE_ENCRYPTION_KEY }}
+          TELEGRAM_DESTINATION_ENCRYPTION_KEY: ${{ secrets.TELEGRAM_DESTINATION_ENCRYPTION_KEY }}
+        run: |
+          python3 -m pip install --quiet cryptography
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+
+          sys.path.insert(0, "scripts")
+          from telegram_destinations import decrypt_store
+
+          path = "botstate/telegram_destinations.json"
+          enabled = False
+          if os.path.exists(path):
+              with open(path, "r", encoding="utf-8") as f:
+                  store = decrypt_store(json.load(f))
+              enabled = any(
+                  isinstance(item, dict)
+                  and item.get("enabled") is True
+                  and item.get("bot_status") == "administrator"
+                  for item in store.get("destinations", [])
+              )
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write(f"enabled={'true' if enabled else 'false'}\n")
+          print(f"Enabled Telegram destination exists: {enabled}")
+          PY
+
+      - name: No enabled Telegram destinations
+        if: steps.publisher_control.outputs.enabled == 'true' && steps.destination_activity.outputs.enabled != 'true'
+        run: |
+          echo "Global publisher is ON but no destination is enabled. Watchdog intentionally does nothing."
+
       - name: Check for active or waiting publisher runs
         id: publisher_activity
-        if: steps.publisher_control.outputs.enabled == 'true'
+        if: steps.publisher_control.outputs.enabled == 'true' && steps.destination_activity.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -74,7 +121,7 @@ jobs:
           echo "Active/waiting publisher runs: ${active}"
 
       - name: Dispatch publisher only when none is active
-        if: steps.publisher_control.outputs.enabled == 'true' && steps.publisher_activity.outputs.active == '0'
+        if: steps.publisher_control.outputs.enabled == 'true' && steps.destination_activity.outputs.enabled == 'true' && steps.publisher_activity.outputs.active == '0'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -101,6 +148,6 @@ jobs:
           exit 1
 
       - name: Publisher already covered
-        if: steps.publisher_control.outputs.enabled == 'true' && steps.publisher_activity.outputs.active != '0'
+        if: steps.publisher_control.outputs.enabled == 'true' && steps.destination_activity.outputs.enabled == 'true' && steps.publisher_activity.outputs.active != '0'
         run: |
           echo "Publisher is ON and already has an active/waiting run; watchdog intentionally does nothing."
