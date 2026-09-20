@@ -566,9 +566,9 @@ def main() -> int:
             ignored += 1
             continue
 
+        # Do not print Telegram user/chat IDs into public GitHub Actions logs.
         print(
-            f"[bot-control] update={update_id} action={action} "
-            f"user={user_id} chat={chat_id}",
+            f"[bot-control] update={update_id} action={action}",
             flush=True,
         )
 
