@@ -339,7 +339,7 @@ def install(control: Any) -> Callable[[], None]:
 
     def process_action(action, *, user_id, chat_id, thread_id, callback_id=None):
         destination_actions = {
-            "owner_claim", "dest_list", "dest_add", "dest_here", "dest_on", "dest_off",
+            "menu", "owner_claim", "dest_list", "dest_add", "dest_here", "dest_on", "dest_off",
             "dest_remove", "dest_delay", "delay_all", "dest_toggle", "dest_member_event",
         }
         if action not in destination_actions:
@@ -353,7 +353,33 @@ def install(control: Any) -> Callable[[], None]:
 
         if action == "owner_claim":
             argument = _pop(action, user_id, chat_id, thread_id).strip()
+            try:
+                claim_chat = _chat_snapshot(control, chat_id)
+            except Exception as exc:
+                raise control.RetryableCommandError(f"could not verify owner claim chat: {exc}") from exc
+            if str(claim_chat.get("type") or "") != "private":
+                control.safe_send_text(chat_id, "🔐 ثبت مالک فقط در پیام خصوصی بات انجام می‌شود.", thread_id=thread_id)
+                return
             _claim_owner(user_id, chat_id, thread_id, argument)
+            return
+
+        if action == "menu":
+            if not _is_owner(control, user_id):
+                control.safe_send_text(
+                    chat_id,
+                    "🔐 کنترل جدید هنوز مالک ندارد.\n\n"
+                    "در پیام خصوصی بات، کد یک‌بارمصرف مالک را با این دستور ثبت کن:\n"
+                    "/owner_claim <کد>\n\n"
+                    "بعد از آن بات را در هر کانال یا گروهی که می‌خواهی ادمین کن.",
+                    thread_id=thread_id,
+                )
+                return
+            control.safe_send_text(
+                chat_id,
+                "کنترل انتشار کانفیگ‌های رایگان:",
+                thread_id=thread_id,
+                keyboard=menu_keyboard(),
+            )
             return
 
         if action == "dest_member_event":
