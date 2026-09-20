@@ -30,7 +30,7 @@ CONTROL_PATH = ".github/telegram-publisher-control.json"
 CONTROL_BRANCH = "main"
 BOT_STATE_PATH = "telegram_bot_control_state.json"
 BOT_STATE_BRANCH = "telegram-bot-state"
-PUBLISHER_STATE_PATH = "telegram_state.json"
+PUBLISHER_STATE_PATH = "telegram_multi_state.json"
 PUBLISHER_STATE_BRANCH = "telegram-state"
 PUBLISHER_WORKFLOW = "publish-telegram.yml"
 
@@ -521,7 +521,7 @@ def main() -> int:
                 "offset": int(state.get("last_update_id", 0)) + 1,
                 "limit": 100,
                 "timeout": 0,
-                "allowed_updates": ["message", "callback_query"],
+                "allowed_updates": ["message", "callback_query", "my_chat_member"],
             },
         )
     except Exception as exc:
@@ -566,9 +566,9 @@ def main() -> int:
             ignored += 1
             continue
 
+        # Do not leak Telegram user/chat IDs into public GitHub Actions logs.
         print(
-            f"[bot-control] update={update_id} action={action} "
-            f"user={user_id} chat={chat_id}",
+            f"[bot-control] update={update_id} action={action}",
             flush=True,
         )
 
