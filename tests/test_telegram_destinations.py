@@ -38,6 +38,21 @@ class TelegramDestinationConfigTests(unittest.TestCase):
         self.assertEqual(decoded["manager_user_ids"], [123456])
         self.assertEqual(decoded["destinations"][0]["chat_id"], -1001234567890)
 
+    def test_key_rotation_can_decrypt_state_written_with_old_fallback(self):
+        store = {"manager_user_ids": [7], "destinations": []}
+        old_payload = destinations.encrypt_store(store, "old-bot-token")
+        with patch.dict(
+            os.environ,
+            {
+                "TELEGRAM_DESTINATION_ENCRYPTION_KEY": "new-dedicated-key",
+                "TELEGRAM_SOURCE_ENCRYPTION_KEY": "",
+                "TELEGRAM_BOT_TOKEN": "old-bot-token",
+            },
+            clear=False,
+        ):
+            decoded = destinations.decrypt_store(old_payload)
+        self.assertEqual(decoded["manager_user_ids"], [7])
+
     def test_single_interval_uses_approximately_twenty_percent_jitter(self):
         self.assertEqual(destinations.parse_interval_spec("60"), (48, 72))
         self.assertEqual(destinations.parse_interval_spec("2m"), (96, 144))
