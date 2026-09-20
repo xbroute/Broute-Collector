@@ -65,6 +65,29 @@ def _save_verified(control: Any, state: Dict[str, Any], message: str) -> Dict[st
         raise control.RetryableCommandError(f"could not verify destination state: {exc}") from exc
     if persisted != expected:
         raise control.RetryableCommandError("Telegram destination state read-back mismatch")
+
+    # Public main only receives a non-sensitive count summary. Chat IDs, titles,
+    # usernames and owner IDs remain encrypted on telegram-bot-state.
+    summary = {
+        "active_count": len(active_destinations(persisted)),
+        "total_count": len(persisted.get("destinations", [])),
+        "updated_at": __import__("time").strftime("%Y-%m-%dT%H:%M:%SZ", __import__("time").gmtime()),
+    }
+    control.write_repo_json(
+        ".github/telegram-destination-summary.json",
+        control.CONTROL_BRANCH,
+        summary,
+        "chore: update Telegram destination summary [automated]",
+    )
+    verified_summary = control.read_repo_json(
+        ".github/telegram-destination-summary.json",
+        control.CONTROL_BRANCH,
+        {},
+    )
+    if int(verified_summary.get("active_count", -1)) != summary["active_count"] or int(
+        verified_summary.get("total_count", -1)
+    ) != summary["total_count"]:
+        raise control.RetryableCommandError("Telegram destination summary read-back mismatch")
     return persisted
 
 
