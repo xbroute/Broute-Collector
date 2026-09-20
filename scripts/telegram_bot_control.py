@@ -521,7 +521,7 @@ def main() -> int:
                 "offset": int(state.get("last_update_id", 0)) + 1,
                 "limit": 100,
                 "timeout": 0,
-                "allowed_updates": ["message", "callback_query"],
+                "allowed_updates": ["message", "callback_query", "my_chat_member"],
             },
         )
     except Exception as exc:
