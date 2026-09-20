@@ -130,9 +130,9 @@ class TelegramDestinationConfigTests(unittest.TestCase):
         }
 
         def save(_, value, message):
-            store.clear()
-            store.update(destinations.normalize_store(value))
-            return store
+            # _membership mutates the same in-memory store before persistence.
+            # Return a normalized read-back snapshot without clearing that object.
+            return destinations.normalize_store(value)
 
         try:
             with (
