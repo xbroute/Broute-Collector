@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 SCRIPTS = os.path.join(ROOT, "scripts")
@@ -130,6 +131,31 @@ class TelegramPublisherMessageTests(unittest.TestCase):
     def test_plain_non_publisher_payload_is_untouched(self):
         payload = {"text": "plain", "chat_id": 1}
         self.assertIs(copy_format.decorate_send_payload(payload), payload)
+
+    def test_send_message_omits_topic_for_plain_channel(self):
+        captured = {}
+
+        def fake_request(token, payload):
+            captured.update(payload)
+            return {"ok": True}
+
+        with patch.object(publisher, "_telegram_request_once", side_effect=fake_request):
+            publisher.send_message("token", "-1001", None, "hello")
+
+        self.assertEqual(captured["chat_id"], "-1001")
+        self.assertNotIn("message_thread_id", captured)
+
+    def test_send_message_includes_topic_for_forum_destination(self):
+        captured = {}
+
+        def fake_request(token, payload):
+            captured.update(payload)
+            return {"ok": True}
+
+        with patch.object(publisher, "_telegram_request_once", side_effect=fake_request):
+            publisher.send_message("token", "-1002", 777, "hello")
+
+        self.assertEqual(captured["message_thread_id"], 777)
 
 
 if __name__ == "__main__":
