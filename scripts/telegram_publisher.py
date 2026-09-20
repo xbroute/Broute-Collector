@@ -496,14 +496,15 @@ def _telegram_request_once(token: str, payload: Dict) -> Dict:
         raise TransientTelegramError(f"Telegram connection error: {exc}") from exc
 
 
-def send_message(token: str, chat_id: str, topic_id: int, text: str) -> None:
+def send_message(token: str, chat_id: str, topic_id: int | None, text: str) -> None:
     payload = {
         "chat_id": chat_id,
-        "message_thread_id": topic_id,
         "text": text,
         "disable_notification": True,
         "link_preview_options": {"is_disabled": True},
     }
+    if topic_id is not None:
+        payload["message_thread_id"] = int(topic_id)
 
     last_error: Exception | None = None
     for attempt in range(1, TELEGRAM_REQUEST_RETRIES + 1):
