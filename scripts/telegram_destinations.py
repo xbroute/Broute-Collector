@@ -61,26 +61,39 @@ class DestinationValidationError(ValueError):
     pass
 
 
-def _secret() -> str:
-    dedicated = os.environ.get("TELEGRAM_DESTINATION_ENCRYPTION_KEY", "").strip()
-    if dedicated:
-        return dedicated
-    shared = os.environ.get("TELEGRAM_SOURCE_ENCRYPTION_KEY", "").strip()
-    if shared:
-        return shared
-    token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
+def _secret_candidates(secret: str | None = None) -> List[str]:
+    if secret is not None:
+        value = str(secret).strip()
+        if not value:
+            raise DestinationStateError("explicit Telegram destination secret is empty")
+        return [value]
+
+    values = [
+        os.environ.get("TELEGRAM_DESTINATION_ENCRYPTION_KEY", "").strip(),
+        os.environ.get("TELEGRAM_SOURCE_ENCRYPTION_KEY", "").strip(),
+        os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
+    ]
+    result: List[str] = []
+    for value in values:
+        if value and value not in result:
+            result.append(value)
+    if not result:
         raise DestinationStateError(
             "TELEGRAM_DESTINATION_ENCRYPTION_KEY, TELEGRAM_SOURCE_ENCRYPTION_KEY "
             "or TELEGRAM_BOT_TOKEN is required"
         )
-    return token
+    return result
+
+
+def _fernet_for_secret(value: str) -> Fernet:
+    digest = hashlib.sha256(
+        b"broute-telegram-destinations-v1\0" + value.encode("utf-8")
+    ).digest()
+    return Fernet(base64.urlsafe_b64encode(digest))
 
 
 def _fernet(secret: str | None = None) -> Fernet:
-    raw = (secret if secret is not None else _secret()).encode("utf-8")
-    digest = hashlib.sha256(b"broute-telegram-destinations-v1\0" + raw).digest()
-    return Fernet(base64.urlsafe_b64encode(digest))
+    return _fernet_for_secret(_secret_candidates(secret)[0])
 
 
 def default_store() -> Dict[str, Any]:
@@ -104,13 +117,20 @@ def decrypt_store(payload: Dict[str, Any], secret: str | None = None) -> Dict[st
     token = str(payload.get("ciphertext") or "")
     if not token:
         return default_store()
-    try:
-        raw = _fernet(secret).decrypt(token.encode("ascii"))
-        data = json.loads(raw.decode("utf-8"))
-    except (InvalidToken, ValueError, json.JSONDecodeError) as exc:
+    data = None
+    last_error: Exception | None = None
+    for candidate in _secret_candidates(secret):
+        try:
+            raw = _fernet_for_secret(candidate).decrypt(token.encode("ascii"))
+            data = json.loads(raw.decode("utf-8"))
+            break
+        except (InvalidToken, ValueError, json.JSONDecodeError) as exc:
+            last_error = exc
+            continue
+    if data is None:
         raise DestinationStateError(
-            "Telegram destination state could not be decrypted"
-        ) from exc
+            "Telegram destination state could not be decrypted with any configured key"
+        ) from last_error
     if not isinstance(data, dict):
         raise DestinationStateError("Telegram destination plaintext is invalid")
     return normalize_store(data)
