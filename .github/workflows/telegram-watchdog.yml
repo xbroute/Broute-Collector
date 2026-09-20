@@ -27,80 +27,107 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: main
+          path: app
+
+      - name: Checkout Telegram publisher state
+        uses: actions/checkout@v4
+        with:
+          ref: telegram-state
+          path: state
 
       - name: Check publisher control
         id: publisher_control
+        working-directory: app
         run: python3 scripts/telegram_publisher_control.py --source local
 
-      - name: Publisher intentionally OFF
-        if: steps.publisher_control.outputs.enabled != 'true'
+      - name: Check active destination count
+        id: destinations
+        if: steps.publisher_control.outputs.enabled == 'true'
+        working-directory: app
         run: |
-          echo "Telegram publisher is OFF. Watchdog intentionally does not dispatch anything."
+          python3 - <<'PY'
+          import json, os
+          try:
+              with open(".github/telegram-destination-summary.json", encoding="utf-8") as f:
+                  data = json.load(f)
+              active = max(0, int(data.get("active_count", 0) or 0))
+          except Exception:
+              active = 0
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"active={active}\n")
+          print(f"Active Telegram destinations: {active}")
+          PY
+
+      - name: Publisher intentionally unavailable
+        if: steps.publisher_control.outputs.enabled != 'true' || steps.destinations.outputs.active == '0'
+        run: |
+          echo "Publisher is globally OFF or there are no active Telegram destinations. Watchdog does nothing."
+
+      - name: Check if queued work is due soon
+        id: due
+        if: steps.publisher_control.outputs.enabled == 'true' && steps.destinations.outputs.active != '0'
+        working-directory: state
+        run: |
+          python3 - <<'PY'
+          import json, os, time
+          try:
+              with open("telegram_state.json", encoding="utf-8") as f:
+                  data = json.load(f)
+          except Exception:
+              data = {}
+          pending = int(data.get("pending_total", 0) or 0)
+          due = int(data.get("next_due_after", 0) or 0)
+          due_in = max(0, due - int(time.time())) if due else 0
+          # pending==0 may simply mean the newest collector snapshot has not yet
+          # been synchronized into per-destination queues, so allow discovery.
+          ready = pending == 0 or due_in <= 600
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"ready={'true' if ready else 'false'}\n")
+              out.write(f"pending={pending}\n")
+              out.write(f"due_in={due_in}\n")
+          print(f"pending={pending}; due_in={due_in}; ready={ready}")
+          PY
 
       - name: Check for active or waiting publisher runs
         id: publisher_activity
-        if: steps.publisher_control.outputs.enabled == 'true'
+        if: steps.publisher_control.outputs.enabled == 'true' && steps.destinations.outputs.active != '0' && steps.due.outputs.ready == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-
           response=""
           for attempt in 1 2 3; do
-            if response=$(curl --fail-with-body --silent --show-error \
-              --header "Accept: application/vnd.github+json" \
-              --header "Authorization: Bearer ${GH_TOKEN}" \
-              --header "X-GitHub-Api-Version: 2022-11-28" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/publish-telegram.yml/runs?per_page=30"); then
+            if response=$(curl --fail-with-body --silent --show-error               --header "Accept: application/vnd.github+json"               --header "Authorization: Bearer ${GH_TOKEN}"               --header "X-GitHub-Api-Version: 2022-11-28"               "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/publish-telegram.yml/runs?per_page=30"); then
               break
             fi
-            echo "Publisher status query attempt ${attempt} failed; retrying..."
             sleep $((attempt * 3))
           done
-
-          if [ -z "${response}" ]; then
-            echo "Could not query publisher workflow status." >&2
-            exit 1
-          fi
-
+          if [ -z "${response}" ]; then exit 1; fi
           active=$(printf '%s' "${response}" | python3 -c '
           import json, sys
           data = json.load(sys.stdin)
-          active_statuses = {"queued", "in_progress", "pending", "requested", "waiting"}
-          print(sum(1 for run in data.get("workflow_runs", []) if run.get("status") in active_statuses))
+          statuses = {"queued", "in_progress", "pending", "requested", "waiting"}
+          print(sum(1 for run in data.get("workflow_runs", []) if run.get("status") in statuses))
           ')
-
           echo "active=${active}" >> "$GITHUB_OUTPUT"
           echo "Active/waiting publisher runs: ${active}"
 
       - name: Dispatch publisher only when none is active
-        if: steps.publisher_control.outputs.enabled == 'true' && steps.publisher_activity.outputs.active == '0'
+        if: steps.publisher_control.outputs.enabled == 'true' && steps.destinations.outputs.active != '0' && steps.due.outputs.ready == 'true' && steps.publisher_activity.outputs.active == '0'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          echo "Publisher is ON and no run is active or waiting; dispatching one recovery run."
-
           for attempt in 1 2 3 4 5; do
-            if curl --fail-with-body --silent --show-error \
-              --request POST \
-              --header "Accept: application/vnd.github+json" \
-              --header "Authorization: Bearer ${GH_TOKEN}" \
-              --header "X-GitHub-Api-Version: 2022-11-28" \
-              --header "Content-Type: application/json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/publish-telegram.yml/dispatches" \
-              --data '{"ref":"main"}'; then
+            if curl --fail-with-body --silent --show-error               --request POST               --header "Accept: application/vnd.github+json"               --header "Authorization: Bearer ${GH_TOKEN}"               --header "X-GitHub-Api-Version: 2022-11-28"               --header "Content-Type: application/json"               "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/publish-telegram.yml/dispatches"               --data '{"ref":"main"}'; then
               echo "Publisher recovery run dispatched successfully."
               exit 0
             fi
-            echo "Publisher recovery dispatch attempt ${attempt} failed; retrying..."
             sleep $((attempt * 3))
           done
-
-          echo "Failed to dispatch publisher after 5 attempts." >&2
           exit 1
 
-      - name: Publisher already covered
-        if: steps.publisher_control.outputs.enabled == 'true' && steps.publisher_activity.outputs.active != '0'
+      - name: Publisher already covered or not due yet
+        if: steps.publisher_control.outputs.enabled == 'true' && steps.destinations.outputs.active != '0'
         run: |
-          echo "Publisher is ON and already has an active/waiting run; watchdog intentionally does nothing."
+          echo "Watchdog completed without creating duplicate or premature publisher work."
