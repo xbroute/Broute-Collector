@@ -29,7 +29,7 @@ from urllib.parse import urlsplit
 
 import telegram_publisher as publisher
 from telegram_copy_format import decorate_send_payload, make_copyable_message
-from telegram_cycle_state import install_cycle_state
+import telegram_multidestination_publisher as multidestination
 from telegram_promo_config import (
     DEFAULT_BUTTON_TEXT,
     DEFAULT_PROMO_URL,
@@ -241,14 +241,9 @@ def main() -> int:
     publisher.send_message = controlled_send_message
     publisher._telegram_request_once = decorated_telegram_request_once
 
-    # Install after the base module is fully imported but before main() reads
-    # state. Existing sent/sent_fingerprints become all-time history and are
-    # migrated to cycle #1 without an immediate resend storm.
-    install_cycle_state(publisher)
-
     try:
         ensure_enabled()
-        return publisher.main()
+        return multidestination.main(publisher, ensure_enabled)
     except PublishingDisabled:
         print(
             "[telegram-control] publisher switched OFF; stopping gracefully. "
