@@ -201,10 +201,10 @@ def install(control: Any) -> Callable[[], None]:
 
         if not control.is_authorized_admin(user_id):
             if callback_id:
-                control.answer_callback(callback_id, "فقط ادمین‌های گروه دسترسی دارند")
+                control.answer_callback(callback_id, "فقط مالک اصلی بات دسترسی دارد")
             control.safe_send_text(
                 chat_id,
-                "⛔ فقط ادمین‌های فعلی گروه Broute اجازه تغییر تنظیمات خرید را دارند.",
+                "⛔ فقط مالک اصلی بات اجازه تغییر تنظیمات خرید را دارد.",
                 thread_id=thread_id,
             )
             return
