@@ -38,6 +38,13 @@ API_VERSION = "2022-11-28"
 ACTIVE_RUN_STATUSES = {"queued", "in_progress", "pending", "requested", "waiting"}
 
 
+class RemoteHTTPError(RuntimeError):
+    def __init__(self, status_code: int, hostname: str):
+        self.status_code = status_code
+        self.hostname = hostname
+        super().__init__(f"HTTP {status_code} from {hostname}")
+
+
 class RetryableCommandError(RuntimeError):
     """Do not advance last_update_id; retry this Telegram command next poll."""
 
@@ -73,7 +80,7 @@ def _json_request(
             return 404, {}
         # Telegram puts the bot token in the URL path. Never log that URL or
         # response bodies which may echo private command/source data.
-        raise RuntimeError(f"HTTP {exc.code} from {urlsplit(url).hostname}") from None
+        raise RemoteHTTPError(exc.code, str(urlsplit(url).hostname)) from None
     except (URLError, TimeoutError) as exc:
         raise RuntimeError(f"network error from {urlsplit(url).hostname} ({type(exc).__name__})") from None
 

@@ -171,6 +171,7 @@ state جداگانه دارند.
 | `/publisher_on`، `/publisher_off`، `/publisher_status` | کنترل سراسری انتشار |
 | `/publisher_pause 1h`، `/publisher_resume` | توقف موقت کلی |
 | `/targets` | فهرست مقصدها و تنظیمات هرکدام |
+| `/target_register @channel_name` یا chat ID | ثبت مقصدی که بات از قبل ادمین است؛ مقصد تازه خاموش می‌ماند |
 | `/target_on 1`، `/target_off 1` | روشن/خاموش‌کردن مقصد |
 | `/target_interval 1 30-90` | فاصله تصادفی ارسال؛ حداقل ۱۵ ثانیه |
 | `/target_template 1` سپس خط جدید و قالب | قالب پیام با دقیقاً یک `{config}` |

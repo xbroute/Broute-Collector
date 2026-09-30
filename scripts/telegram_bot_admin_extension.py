@@ -39,7 +39,7 @@ OPERATE_ACTIONS = {"publisher_on", "publisher_off", "publisher_pause", "publishe
 TEAM_ACTIONS = {"admin_add", "admin_remove"}
 BACKUP_ACTIONS = {"backup", "restore"}
 CONFIGURE_ACTIONS = {"target_interval", "target_template", "target_template_reset", "target_topic", "target_remove",
-                     "target_filter", "target_schedule", "target_quota", "target_check", "target_rollback", "targets_on",
+                     "target_filter", "target_schedule", "target_quota", "target_check", "target_rollback", "target_register", "targets_on",
                      "source_add", "source_remove", "source_on", "source_off", "source_name", "source_check",
                      "config_block", "config_unblock", "buy_link", "buy_text"}
 COMMANDS = READ_ACTIONS | OPERATE_ACTIONS | TEAM_ACTIONS | BACKUP_ACTIONS | CONFIGURE_ACTIONS | {"whoami", "cancel", "confirm"}
@@ -270,9 +270,9 @@ class AdminPanel:
         if not policy.allowed(store, actor, required):
             raise policy.PolicyError("نقش شما اجازه این تغییر را ندارد")
         if verb not in {"source_add", "target_interval", "target_template", "target_topic", "target_filter", "target_schedule",
-                        "target_quota", "source_name", "buy_link", "buy_text", "admin_add"}:
+                        "target_quota", "target_register", "source_name", "buy_link", "buy_text", "admin_add"}:
             raise policy.PolicyError("درخواست ورودی معتبر نیست")
-        if verb.startswith("target_"):
+        if verb.startswith("target_") and verb != "target_register":
             _, item = self.target(store, selector)
             selector = item["key"]
         elif verb == "source_name":
@@ -571,6 +571,9 @@ class AdminPanel:
         elif action == "targets":
             self.paginated(chat, "📡 مقصدها (مقصد تازه خاموش ثبت می‌شود)", store["destinations"], argument,
                            lambda item, i: _button(f"{i}. {'🟢' if item['enabled'] else '🔴'} {item['title'][:35]}", "target_show", item["key"]), "targets")
+            if policy.allowed(store, actor, "configure"):
+                self.say(chat, "برای ثبت گروه/کانالی که بات از قبل در آن ادمین است، chat ID یا @username را بفرستید.",
+                         [[_button("➕ ثبت مقصد موجود", "prompt", "target_register")]])
         elif action == "sources":
             self.paginated(chat, "📚 منابع مدیریتی", sources_ext._load_sources(self.control), argument,
                            lambda item, i: _button(f"{i}. {'🟢' if item['enabled'] else '🔴'} {str(item.get('name') or source_host(item['url']))[:35]}", "source_show", item["id"]), "sources")
@@ -699,6 +702,33 @@ class AdminPanel:
             if policy.allowed(store, actor, "configure"):
                 rows.insert(0, [_button("لینک خرید", "prompt", "buy_link"), _button("نام دکمه", "prompt", "buy_text")])
             self.say(chat, f"🛒 نام: {item['text']}\nلینک: {item['url']}", rows)
+        elif action == "target_register":
+            selector = argument.strip()
+            if not re.fullmatch(r"-\d{1,16}|@[A-Za-z0-9_]{5,32}", selector):
+                raise policy.PolicyError("مثال: /target_register -1001234567890 یا @channel_name")
+            details = self.control.telegram_api("getChat", {"chat_id": selector})
+            if not isinstance(details, dict) or details.get("type") not in {"group", "supergroup", "channel"}:
+                raise policy.PolicyError("مقصد باید گروه یا کانال باشد")
+            target_id = policy.integer(details.get("id"), -(2**53 - 1), -1)
+            if actor not in targets._chat_admin_ids(self.control, target_id):
+                raise policy.PolicyError("برای ثبت مقصد، باید ادمین همان گروه یا کانال باشید")
+            index, existing = find_destination(store["destinations"], str(target_id))
+            if existing is None and len(store["destinations"]) >= MAX_DESTINATIONS:
+                raise policy.PolicyError("سقف تعداد مقصدها پر شده است")
+            item = dict(existing) if existing else {"chat_id": target_id, "title": details.get("title"), "enabled": False,
+                                                    "chat_type": details["type"], "discovered_at": now_iso()}
+            checked = self.check_target(item)
+            if checked["bot_status"] != "administrator":
+                raise policy.PolicyError("بات باید ادمین و دارای حق ارسال در مقصد باشد")
+            from telegram_destinations import normalize_destination
+            checked = normalize_destination(checked)
+            checked["updated_at"] = now_iso()
+            if existing is None:
+                store["destinations"].append(checked)
+            else:
+                store["destinations"][int(index)] = checked
+            self.save(store, actor, action, checked["key"])
+            self.show_target(store, actor, chat, checked)
         elif action.startswith("target_") or action in {"queue", "queue_retry", "queue_rebuild", "queue_resolve"}:
             self.target_action(action, argument, store, actor, chat)
         elif action.startswith("source_"):
@@ -895,6 +925,7 @@ HELP_TEXT = """❔ راهنمای مدیریت Broute
 /blocked فهرست کانفیگ‌های مسدود
 
 مقصدها: /targets سپس انتخاب مقصد
+/target_register -1001234567890 یا @channel_name برای مقصدی که بات از قبل ادمین است
 /target_on 1 و /target_off 1
 /target_interval 1 30-90
 /target_template 1 سپس خط جدید و قالب دارای {config}
@@ -1041,6 +1072,14 @@ def install(control: Any) -> Callable[[], None]:
                 latest = panel.load()
                 latest["administration"]["sessions"].pop(str(user_id), None)
                 panel.save(latest, user_id)
+        except RuntimeError as exc:
+            if getattr(exc, "hostname", None) != "api.telegram.org" or getattr(exc, "status_code", None) not in {400, 403, 404}:
+                raise
+            # Invalid chat IDs / permanently missing permissions are command
+            # failures, not transient outages that should block the entire poll.
+            if callback_id:
+                control.answer_callback(callback_id, "مقصد یا دسترسی معتبر نیست")
+            panel.say(chat_id, "❌ تلگرام مقصد یا دسترسی درخواست‌شده را نپذیرفت؛ شناسه و ادمینی بات را بررسی کنید.")
         except ValueError as exc:
             if callback_id:
                 control.answer_callback(callback_id, "درخواست پذیرفته نشد")

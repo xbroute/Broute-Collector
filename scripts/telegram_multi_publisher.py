@@ -321,6 +321,12 @@ def load_destinations_remote() -> Dict[str, Any]:
             )
             if shown.returncode == 0:
                 return _load_destination_payload_from_text(shown.stdout)
+            listed = _git(["ls-tree", f"origin/{DESTINATION_STATE_BRANCH}", "--", DESTINATION_STATE_PATH], repo_dir, timeout=10)
+            if listed.returncode == 0 and not listed.stdout.strip():
+                # A freshly initialized state branch may not have this optional
+                # file yet. Confirm absence in the freshly fetched tree; never
+                # reuse an older enabled local checkout after deletion/failure.
+                return {"manager_user_ids": [], "destinations": []}
         # An OFF/remove may have been committed after this checkout. A stale
         # local file must never override a failed read of the current controls.
         raise RuntimeError("could not refresh destination controls; publishing paused")
