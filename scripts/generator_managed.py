@@ -40,7 +40,7 @@ def managed_sources() -> List[Dict[str, Any]]:
     return [dict(item) for item in _cached_sources]
 
 
-def _fetch_managed_source(source: Dict[str, Any]) -> Dict[str, str] | None:
+def _fetch_managed_source(source: Dict[str, Any]) -> Dict[str, Any]:
     source_id = str(source.get("id") or "unknown")[:12]
     try:
         content = fetch_subscription(str(source.get("url") or ""))
@@ -50,10 +50,9 @@ def _fetch_managed_source(source: Dict[str, Any]) -> Dict[str, str] | None:
             file=sys.stderr,
             flush=True,
         )
-        return None
-
-    if not content.strip():
-        return None
+        return {"source_name": f"BotSub-{source_id}",
+                "source_url": f"managed://{source_id}",
+                "content": "", "fetch_failed": True}
 
     # Never expose the raw subscription URL to data/servers.json or logs.
     return {
@@ -63,7 +62,7 @@ def _fetch_managed_source(source: Dict[str, Any]) -> Dict[str, str] | None:
     }
 
 
-def collect_with_managed() -> List[Dict[str, str]]:
+def collect_with_managed() -> List[Dict[str, Any]]:
     results = _original_collect()
     sources = managed_sources()
 

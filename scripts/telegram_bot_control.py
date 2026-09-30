@@ -18,7 +18,7 @@ import sys
 import time
 from typing import Any, Dict, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
@@ -48,6 +48,7 @@ def _json_request(
     method: str = "GET",
     headers: Dict[str, str] | None = None,
     payload: Dict[str, Any] | None = None,
+    raw_body: bytes | None = None,
     timeout: int = 30,
     allow_404: bool = False,
 ) -> Tuple[int, Any]:
@@ -55,7 +56,9 @@ def _json_request(
     if headers:
         request_headers.update(headers)
 
-    data = None
+    if payload is not None and raw_body is not None:
+        raise ValueError("request cannot contain both JSON and a raw body")
+    data = raw_body
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
         request_headers.setdefault("Content-Type", "application/json")
@@ -66,12 +69,13 @@ def _json_request(
             raw = response.read().decode("utf-8")
             return response.status, json.loads(raw) if raw else {}
     except HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
         if allow_404 and exc.code == 404:
             return 404, {}
-        raise RuntimeError(f"HTTP {exc.code} for {url}: {body[:500]}") from exc
+        # Telegram puts the bot token in the URL path. Never log that URL or
+        # response bodies which may echo private command/source data.
+        raise RuntimeError(f"HTTP {exc.code} from {urlsplit(url).hostname}") from None
     except (URLError, TimeoutError) as exc:
-        raise RuntimeError(f"network error for {url}: {exc}") from exc
+        raise RuntimeError(f"network error from {urlsplit(url).hostname} ({type(exc).__name__})") from None
 
 
 def telegram_api(method: str, payload: Dict[str, Any] | None = None) -> Any:
@@ -84,7 +88,7 @@ def telegram_api(method: str, payload: Dict[str, Any] | None = None) -> Any:
         timeout=35,
     )
     if not isinstance(response, dict) or not response.get("ok"):
-        raise RuntimeError(f"Telegram API {method} failed: {response}")
+        raise RuntimeError(f"Telegram API {method} failed")
     return response.get("result")
 
 
@@ -538,8 +542,14 @@ def main() -> int:
 
     handled = 0
     ignored = 0
+    deadline = time.monotonic() + 240
 
     for update in updates:
+        # Leave room for one command's network calls/checkpoint within the
+        # five-minute workflow budget. Unprocessed updates retain their offset.
+        if time.monotonic() >= deadline - 30:
+            print("[bot-control] polling budget reached; remaining updates deferred.", flush=True)
+            break
         if not isinstance(update, dict):
             ignored += 1
             continue
@@ -550,7 +560,14 @@ def main() -> int:
             ignored += 1
             continue
 
-        action, user_id, chat_id, thread_id, callback_id = update_to_action(update)
+        try:
+            action, user_id, chat_id, thread_id, callback_id = update_to_action(update)
+        except (AttributeError, IndexError, KeyError, TypeError, ValueError):
+            # Inaccessible/malformed callback messages must not permanently
+            # block every later command. Genuine API/persistence errors below
+            # still keep their update offset and are retried.
+            action, user_id, chat_id, thread_id, callback_id = (None,) * 5
+            print(f"[bot-control] ignored malformed update {update_id}.", flush=True)
 
         if action is None or user_id is None or chat_id is None:
             state["last_update_id"] = max(int(state.get("last_update_id", 0)), update_id)

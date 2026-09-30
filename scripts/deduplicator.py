@@ -15,6 +15,8 @@ import json
 from typing import Any, Dict, List
 from urllib.parse import parse_qsl, unquote, urlsplit
 
+from common import shadowsocks_uri_parts
+
 
 def _decode_vmess(raw: str) -> Dict[str, Any] | None:
     try:
@@ -42,11 +44,26 @@ def canonical_raw_connection_key(raw: str, protocol: str) -> str:
             data.pop("ps", None)
             canonical = data
 
+    if protocol == "shadowsocks":
+        try:
+            method, password, endpoint = shadowsocks_uri_parts(raw)
+            canonical = {
+                "method": method,
+                "password": password,
+                "host": (endpoint.hostname or "").lower(),
+                "port": endpoint.port,
+                "path": "" if endpoint.path == "/" else endpoint.path,
+                "query": sorted(parse_qsl(endpoint.query, keep_blank_values=True)),
+            }
+        except ValueError:
+            # Malformed legacy payloads must still retain exact letter case.
+            canonical = raw.split("#", 1)[0]
+
     if canonical is None and "://" in raw and protocol != "vmess":
         try:
             parsed = urlsplit(raw.split("#", 1)[0])
             query = sorted(
-                (str(key).lower(), str(value))
+                (str(key), str(value))
                 for key, value in parse_qsl(parsed.query, keep_blank_values=True)
             )
             canonical = {

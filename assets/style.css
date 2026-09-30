@@ -187,7 +187,7 @@ a { color: inherit; }
 /* ---------- Hero ---------- */
 .hero {
   display: grid;
-  grid-template-columns: 1.1fr 0.9fr;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
   gap: 40px;
   align-items: center;
   padding: 72px 20px 40px;
@@ -208,7 +208,8 @@ a { color: inherit; }
   font-weight: 800;
   line-height: 1.35;
   letter-spacing: -0.01em;
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   animation: title-box-glow 4s ease-in-out infinite;
 }
 #typing-text {
@@ -424,6 +425,8 @@ a { color: inherit; }
   padding: 10px 12px;
   font-family: var(--font-display);
   font-size: 0.88rem;
+  min-width: 0;
+  max-width: 100%;
 }
 .toolbar input { flex: 1 1 220px; }
 .toolbar select { flex: 1 1 150px; }
@@ -437,11 +440,14 @@ a { color: inherit; }
   gap: 10px;
 }
 .server-card-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
-.server-name { font-weight: 700; font-size: 0.95rem; }
+.server-card-top > div { min-width: 0; }
+.server-card-top > .badge { flex-shrink: 0; }
+.server-name { font-weight: 700; font-size: 0.95rem; overflow-wrap: anywhere; }
 .server-proto { font-family: var(--font-mono); font-size: 0.72rem; color: var(--accent-2); text-transform: uppercase; }
 .status-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-left: 6px; }
 .status-online { background: var(--online); box-shadow: 0 0 8px var(--online); }
 .status-offline { background: var(--offline); }
+.status-unknown { background: #94a3b8; }
 .server-meta { font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted); display: flex; flex-wrap: wrap; gap: 8px 14px; }
 .badge { display: inline-block; font-size: 0.68rem; padding: 2px 8px; border-radius: 999px; font-family: var(--font-mono); }
 .badge-secure { background: rgba(52,211,153,0.15); color: var(--online); }
@@ -489,8 +495,14 @@ a { color: inherit; }
 /* ---------- Responsive ---------- */
 @media (max-width: 860px) {
   .main-nav { display: none; }
-  .hero { grid-template-columns: 1fr; padding-top: 100px; }
+  .hero { grid-template-columns: minmax(0, 1fr); padding-top: 100px; }
   .warning-box ul { columns: 1; }
+}
+
+@media (max-width: 480px) {
+  .platform-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .platform-label { overflow-wrap: anywhere; }
+  .server-list { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* ---------- Focus visibility ---------- */

@@ -1,6 +1,7 @@
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 SCRIPTS = os.path.join(ROOT, "scripts")
@@ -46,6 +47,11 @@ def destination(template=None):
 
 
 class TelegramMultiPublisherTests(unittest.TestCase):
+    def setUp(self):
+        promo = patch.object(multi, "_current_promo", return_value={"url": "https://t.me/xbroutebot", "text": "خرید"})
+        promo.start()
+        self.addCleanup(promo.stop)
+
     def test_custom_template_keeps_exact_copy_text(self):
         server = sample_server()
         dest = destination("برای {destination}\n{country}\n\n{config}\n\n{brand}")

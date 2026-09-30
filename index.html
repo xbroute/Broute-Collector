@@ -27,7 +27,6 @@
     </div>
     <nav class="main-nav">
       <a href="#servers">سرورها</a>
-      <a href="#sources">منابع</a>
       <a href="#faq">سوالات</a>
     </nav>
     <a id="brand-telegram" class="btn btn-ghost" href="https://t.me/YamYamProxy" target="_blank" rel="noopener">تلگرام</a>
@@ -40,7 +39,7 @@
   <section class="hero container">
     <div class="hero-copy">
      <h1 id="typing-heading" class="hero-title-box"><span id="typing-text">کانفیگ رایگان مولتی لوکیشن</span></h1>
-      <p class="lead">این پروژه کانفیگ‌های عمومی منتشرشده در مخازن GitHub و منابع باز را هر ۲۰ دقیقه یکبار جمع‌آوری، موارد نا‌امن را پاک‌سازی و در یک لینک Subscription واحد منتشر می‌کند.</p>
+      <p class="lead">این پروژه کانفیگ‌های عمومی منابع فعال را با زمان‌بندی ۵ دقیقه‌ای جمع‌آوری، موارد نامعتبر و تکراری را پاک‌سازی و در یک لینک Subscription واحد منتشر می‌کند.</p>
       <div class="hero-actions-main">
         <button class="btn-copy-sub" id="copy-sub-btn">
           <span class="btn-copy-sub-icon">⧉</span>
@@ -68,7 +67,7 @@
       <div class="stat-grid">
         <div class="stat stat-violet"><span class="stat-bg"></span><span class="stat-value" id="stat-total">–</span><span class="stat-label">کل کانفیگ‌ها</span></div>
         <div class="stat stat-green"><span class="stat-bg"></span><span class="stat-value" id="stat-online">–</span><span class="stat-label">آنلاین</span></div>
-        <div class="stat stat-cyan"><span class="stat-bg"></span><span class="stat-value" id="stat-secure">–</span><span class="stat-label">امن (TLS/Reality)</span></div>
+        <div class="stat stat-cyan"><span class="stat-bg"></span><span class="stat-value" id="stat-secure">–</span><span class="stat-label">دارای TLS/Reality</span></div>
         <div class="stat stat-amber"><span class="stat-bg"></span><span class="stat-value" id="stat-countries">–</span><span class="stat-label">کشور</span></div>
         <div class="stat stat-pink"><span class="stat-bg"></span><span class="stat-value" id="stat-sources">–</span><span class="stat-label">منبع فعال</span></div>
         <div class="stat stat-blue"><span class="stat-bg"></span><span class="stat-value" id="stat-updated">–</span><span class="stat-label">آخرین به‌روزرسانی</span></div>
@@ -86,26 +85,34 @@
   <section class="container section" id="servers">
     <h2 class="section-title">سرورها</h2>
     <div class="toolbar glass">
-      <input id="search-input" type="search" placeholder="جستجوی نام یا آدرس سرور…" />
-      <select id="filter-protocol">
+      <input id="search-input" type="search" aria-label="جستجوی سرور" placeholder="جستجوی نام یا آدرس سرور…" />
+      <select id="filter-protocol" aria-label="پروتکل">
         <option value="">همه پروتکل‌ها</option>
       </select>
-      <select id="filter-country">
+      <select id="filter-country" aria-label="کشور">
         <option value="">همه کشورها</option>
       </select>
-      <select id="filter-security">
-        <option value="">همه (امن/ناامن)</option>
-        <option value="secure">فقط امن</option>
+      <select id="filter-security" aria-label="رمزنگاری TLS">
+        <option value="">همه (با TLS / بدون TLS)</option>
+        <option value="secure">فقط دارای TLS/Reality</option>
         <option value="insecure">فقط بدون TLS</option>
       </select>
-      <select id="sort-by">
-        <option value="latency">مرتب‌سازی: کمترین پینگ</option>
+      <select id="filter-status" aria-label="وضعیت سرور">
+        <option value="">همه وضعیت‌ها</option>
+        <option value="online">فقط آنلاین</option>
+        <option value="offline">فقط آفلاین</option>
+        <option value="unknown">بررسی نشده</option>
+      </select>
+      <select id="sort-by" aria-label="مرتب‌سازی">
+        <option value="latency">مرتب‌سازی: کمترین تأخیر تست</option>
         <option value="country">مرتب‌سازی: کشور</option>
         <option value="name">مرتب‌سازی: نام</option>
       </select>
       <button class="btn btn-ghost" id="refresh-btn">تازه‌سازی</button>
     </div>
     <div id="server-list" class="server-list"></div>
+    <p id="server-results-count" class="muted" role="status" aria-live="polite"></p>
+    <button id="load-more-btn" class="btn btn-outline" hidden>نمایش سرورهای بیشتر</button>
     <p id="server-empty" class="empty-state" hidden>هیچ سروری با این فیلتر پیدا نشد.</p>
   </section>
   
@@ -119,7 +126,7 @@
       </details>
       <details class="glass">
         <summary>چرا برخی سرورها آفلاین نشان داده می‌شوند؟</summary>
-        <p>سرورهای عمومی رایگان ممکن است هر لحظه توسط صاحبشان تغییر کنند یا از دسترس خارج شوند. بررسی وضعیت هر چند ساعت یک‌بار انجام می‌شود.</p>
+        <p>سرورهای عمومی رایگان ممکن است هر لحظه تغییر کنند. آنلاین‌بودن نتیجه آخرین تست دسترسی به پورت سرور است؛ اتصال واقعی و سرعت روی اینترنت شما ممکن است متفاوت باشد. بررسی‌ها در هر اجرا بین منابع تقسیم می‌شوند.</p>
       </details>
       <details class="glass">
         <summary>آیا استفاده از این کانفیگ‌ها امن است؟</summary>
@@ -140,9 +147,9 @@
 </footer>
 
 <!-- QR MODAL -->
-<div id="qr-modal" class="modal-overlay" hidden>
+<div id="qr-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-label="QR Code لینک اشتراک" hidden>
   <div class="modal glass">
-    <button class="modal-close" id="qr-close">✕</button>
+    <button class="modal-close" id="qr-close" aria-label="بستن">✕</button>
     <h3>QR Code لینک Subscription</h3>
     <div id="qr-code-container"></div>
     <button class="btn btn-primary" id="qr-download">دانلود QR Code</button>
@@ -150,18 +157,18 @@
 </div>
 
 <!-- PLATFORM APPS MODAL -->
-<div id="platform-apps-modal" class="modal-overlay" hidden>
+<div id="platform-apps-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="platform-apps-title" hidden>
   <div class="modal glass modal-wide">
-    <button class="modal-close" id="platform-apps-close">✕</button>
+    <button class="modal-close" id="platform-apps-close" aria-label="بستن">✕</button>
     <h3 id="platform-apps-title">برنامه‌ها</h3>
     <div id="platform-apps-list" class="platform-apps-list"></div>
   </div>
 </div>
 
 <!-- APP DETAIL MODAL -->
-<div id="app-detail-modal" class="modal-overlay" hidden>
+<div id="app-detail-modal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="app-detail-title" hidden>
   <div class="modal glass modal-wide">
-    <button class="modal-close" id="app-detail-close">✕</button>
+    <button class="modal-close" id="app-detail-close" aria-label="بستن">✕</button>
     <button class="modal-back" id="app-detail-back">→ بازگشت</button>
     <h3 id="app-detail-title"></h3>
     <a class="btn btn-primary app-detail-download" id="app-detail-download" target="_blank" rel="noopener">دانلود برنامه</a>
@@ -170,10 +177,7 @@
   </div>
 </div>
 
-<div id="toast" class="toast" hidden></div>
-</div>
-
-<div id="toast" class="toast" hidden></div>
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <script src="assets/apps-data.js"></script>

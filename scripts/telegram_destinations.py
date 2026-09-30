@@ -11,6 +11,7 @@ from string import Formatter
 from typing import Any, Dict, List, Tuple
 
 from cryptography.fernet import Fernet, InvalidToken
+from telegram_admin_policy import PolicyError, normalize_admin, normalize_policy
 
 DESTINATION_STATE_PATH = "telegram_destinations.json"
 DESTINATION_STATE_BRANCH = "telegram-bot-state"
@@ -110,13 +111,15 @@ def encrypt_store(store: Dict[str, Any], secret: str | None = None) -> Dict[str,
 
 
 def decrypt_store(payload: Dict[str, Any], secret: str | None = None) -> Dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise DestinationStateError("Telegram destination envelope must be a JSON object")
     if not payload:
         return default_store()
-    if int(payload.get("version", 0) or 0) != DESTINATION_STATE_VERSION:
+    if payload.get("version") != DESTINATION_STATE_VERSION:
         raise DestinationStateError("unsupported Telegram destination state version")
     token = str(payload.get("ciphertext") or "")
     if not token:
-        return default_store()
+        raise DestinationStateError("Telegram destination ciphertext is missing")
     data = None
     last_error: Exception | None = None
     for candidate in _secret_candidates(secret):
@@ -133,13 +136,16 @@ def decrypt_store(payload: Dict[str, Any], secret: str | None = None) -> Dict[st
         ) from last_error
     if not isinstance(data, dict):
         raise DestinationStateError("Telegram destination plaintext is invalid")
-    return normalize_store(data)
+    try:
+        return normalize_store(data)
+    except PolicyError as exc:
+        raise DestinationStateError("Telegram administration policy is invalid") from exc
 
 
 def _as_int(value: Any, default: int = 0) -> int:
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -191,6 +197,8 @@ def parse_interval_spec(spec: str) -> Tuple[int, int]:
         )
 
     first = int(match.group(1)) * _unit_multiplier(match.group(2) or "")
+    if first < MIN_DELAY_SECONDS:
+        raise DestinationValidationError(f"حداقل فاصله مجاز {MIN_DELAY_SECONDS} ثانیه است")
     second_raw = match.group(3)
     if second_raw is None:
         low = max(MIN_DELAY_SECONDS, int(round(first * 0.8)))
@@ -254,6 +262,7 @@ def normalize_destination(item: Dict[str, Any]) -> Dict[str, Any]:
         "message_thread_id": thread_id,
         "discovered_at": str(item.get("discovered_at") or ""),
         "updated_at": str(item.get("updated_at") or ""),
+        **normalize_policy(item),
     }
 
 
@@ -280,7 +289,13 @@ def normalize_store(store: Dict[str, Any]) -> Dict[str, Any]:
         seen_chats.add(item["chat_id"])
         destinations.append(item)
 
-    return {"manager_user_ids": managers, "destinations": destinations[:MAX_DESTINATIONS]}
+    result = {"manager_user_ids": managers, "destinations": destinations[:MAX_DESTINATIONS]}
+    if "administration" in store:
+        result["administration"] = normalize_admin(store["administration"], managers)
+        # The outer production extension enforces role permissions. Keep the
+        # legacy extensions' private read access compatible with every role.
+        result["manager_user_ids"] = [int(uid) for uid in result["administration"]["roles"]]
+    return result
 
 
 def find_destination(
@@ -298,14 +313,17 @@ def find_destination(
         pass
 
     lowered = value.lower()
+    matches = []
     for index, item in enumerate(destinations):
-        if str(item.get("key") or "").lower().startswith(lowered):
-            return index, item
         if str(item.get("chat_id")) == value:
             return index, item
         username = str(item.get("username") or "").lstrip("@").lower()
         if username and username == lowered.lstrip("@"):
             return index, item
+        if str(item.get("key") or "").lower().startswith(lowered):
+            matches.append((index, item))
+    if len(matches) == 1:
+        return matches[0]
     return None, None
 
 

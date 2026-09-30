@@ -19,6 +19,8 @@ on:
       - "scripts/telegram_bot_control.py"
       - "scripts/telegram_bot_destination_extension.py"
       - "scripts/telegram_destinations.py"
+      - "scripts/telegram_admin_policy.py"
+      - "scripts/telegram_bot_admin_extension.py"
       - "scripts/telegram_multi_publisher.py"
       - "scripts/telegram_bot_control_verified.py"
       - "scripts/telegram_bot_control_full.py"
@@ -39,6 +41,9 @@ on:
       - "tests/test_telegram_bot_control.py"
       - "tests/test_telegram_destinations.py"
       - "tests/test_telegram_multi_publisher.py"
+      - "tests/test_telegram_admin_policy.py"
+      - "tests/test_telegram_admin_panel.py"
+      - "tests/test_telegram_delivery_journal.py"
       - "tests/test_telegram_bot_control_verified.py"
       - "tests/test_telegram_bot_sources.py"
       - "tests/test_telegram_promo.py"
@@ -58,6 +63,8 @@ on:
       - "scripts/telegram_bot_control.py"
       - "scripts/telegram_bot_destination_extension.py"
       - "scripts/telegram_destinations.py"
+      - "scripts/telegram_admin_policy.py"
+      - "scripts/telegram_bot_admin_extension.py"
       - "scripts/telegram_multi_publisher.py"
       - "scripts/telegram_bot_control_verified.py"
       - "scripts/telegram_bot_control_full.py"
@@ -78,6 +85,9 @@ on:
       - "tests/test_telegram_bot_control.py"
       - "tests/test_telegram_destinations.py"
       - "tests/test_telegram_multi_publisher.py"
+      - "tests/test_telegram_admin_policy.py"
+      - "tests/test_telegram_admin_panel.py"
+      - "tests/test_telegram_delivery_journal.py"
       - "tests/test_telegram_bot_control_verified.py"
       - "tests/test_telegram_bot_sources.py"
       - "tests/test_telegram_promo.py"
@@ -103,7 +113,9 @@ jobs:
   poll:
     # workflow_run can theoretically be emitted for another branch. Never let
     # such a run consume the production bot's update queue.
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.head_branch == 'main'
+    # Pull requests are tested by read-only ci.yml. Production bot credentials
+    # and write-capable jobs must never execute pull-request code.
+    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -112,6 +124,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || 'main' }}
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -128,6 +141,8 @@ jobs:
             scripts/telegram_bot_control.py \
             scripts/telegram_bot_destination_extension.py \
             scripts/telegram_destinations.py \
+            scripts/telegram_admin_policy.py \
+            scripts/telegram_bot_admin_extension.py \
             scripts/telegram_multi_publisher.py \
             scripts/telegram_bot_control_verified.py \
             scripts/telegram_bot_control_full.py \
@@ -149,18 +164,7 @@ jobs:
       - name: Run regression tests
         if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
         run: |
-          python -m unittest \
-            tests.test_telegram_bot_control \
-            tests.test_telegram_destinations \
-            tests.test_telegram_multi_publisher \
-            tests.test_telegram_bot_control_verified \
-            tests.test_telegram_bot_sources \
-            tests.test_telegram_promo \
-            tests.test_telegram_promo_text \
-            tests.test_telegram_cycle_state \
-            tests.test_telegram_publisher \
-            tests.test_online_subscription \
-            tests.test_fair_validation -v
+          python -m unittest discover -s tests -v
 
       - name: Verify Telegram Bot API path
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
@@ -185,5 +189,6 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_SOURCE_ENCRYPTION_KEY: ${{ secrets.TELEGRAM_SOURCE_ENCRYPTION_KEY }}
           TELEGRAM_DESTINATION_ENCRYPTION_KEY: ${{ secrets.TELEGRAM_DESTINATION_ENCRYPTION_KEY }}
+          TELEGRAM_OWNER_USER_IDS: ${{ secrets.TELEGRAM_OWNER_USER_IDS }}
           GITHUB_TOKEN: ${{ github.token }}
         run: python scripts/telegram_bot_control_full.py

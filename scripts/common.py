@@ -11,6 +11,8 @@ import base64
 import hashlib
 import ipaddress
 import json
+import os
+import tempfile
 import re
 import socket
 from dataclasses import dataclass, field, asdict
@@ -97,7 +99,7 @@ def is_probably_base64(text: str) -> bool:
 
 def safe_b64decode(text: str) -> Optional[str]:
     try:
-        padded = text.strip()
+        padded = re.sub(r"\s+", "", text)
         padded += "=" * (-len(padded) % 4)
         decoded = base64.urlsafe_b64decode(padded.encode("utf-8"))
         return decoded.decode("utf-8", errors="ignore")
@@ -110,14 +112,7 @@ def is_private_or_reserved(address: str) -> bool:
     host = address.strip("[]")
     try:
         ip = ipaddress.ip_address(host)
-        return (
-            ip.is_private
-            or ip.is_loopback
-            or ip.is_link_local
-            or ip.is_reserved
-            or ip.is_multicast
-            or ip.is_unspecified
-        )
+        return not ip.is_global or ip.is_multicast
     except ValueError:
         # دامنه است نه IP؛ فقط localhost صریح را رد می‌کنیم
         return host.lower() in {"localhost", "0.0.0.0", "127.0.0.1"}
@@ -147,7 +142,7 @@ def detect_protocol(line: str) -> Optional[str]:
 
 def _parse_vmess(line: str) -> ParsedConfig:
     cfg = ParsedConfig(raw=line, protocol="vmess")
-    payload = line[len("vmess://"):]
+    payload = line[len("vmess://"):].split("#", 1)[0]
     decoded = safe_b64decode(payload)
     if not decoded:
         cfg.reject_reason = "vmess base64 decode failed"
@@ -157,12 +152,15 @@ def _parse_vmess(line: str) -> ParsedConfig:
     except Exception:
         cfg.reject_reason = "vmess json parse failed"
         return cfg
-    cfg.address = str(data.get("add", ""))
+    if not isinstance(data, dict):
+        cfg.reject_reason = "vmess payload must be a JSON object"
+        return cfg
+    cfg.address = str(data.get("add") or "")
     try:
         cfg.port = int(data.get("port", 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         cfg.port = 0
-    cfg.uuid_or_password = str(data.get("id", ""))
+    cfg.uuid_or_password = str(data.get("id") or "")
     cfg.transport = str(data.get("net", "tcp"))
     cfg.host = str(data.get("host", ""))
     cfg.sni = str(data.get("sni", cfg.host))
@@ -183,7 +181,8 @@ def _parse_generic_uri(line: str, protocol: str) -> ParsedConfig:
     try:
         parsed = urlparse(line)
         cfg.address = parsed.hostname or ""
-        cfg.port = parsed.port or 0
+        port = parsed.port
+        cfg.port = port if port is not None else (443 if protocol == "hysteria2" else 0)
         cfg.uuid_or_password = unquote(parsed.username or "")
     except (ValueError, Exception):
         # می‌تونه به‌خاطر IPv6 بدون براکت یا فرمت غیراستاندارد رخ بده؛
@@ -194,49 +193,63 @@ def _parse_generic_uri(line: str, protocol: str) -> ParsedConfig:
     cfg.name = unquote(parsed.fragment or "") or f"{protocol}-{cfg.address}"
 
     query = parse_qs(parsed.query)
-    cfg.transport = (query.get("type") or query.get("network") or ["tcp"])[0]
-    security = (query.get("security") or ["none"])[0].lower()
+    default_transport = "quic" if protocol in {"hysteria2", "tuic"} else "tcp"
+    cfg.transport = (query.get("type") or query.get("network") or [default_transport])[0]
+    default_security = "tls" if protocol in {"trojan", "hysteria2", "tuic"} else "none"
+    security = (query.get("security") or [default_security])[0].lower()
     cfg.security = security
     cfg.tls = security in {"tls", "reality"}
     cfg.sni = (query.get("sni") or [""])[0]
     cfg.host = (query.get("host") or [cfg.sni])[0]
 
-    cfg.valid = bool(cfg.address and cfg.port)
+    needs_credentials = protocol in {"vless", "trojan", "tuic"}
+    cfg.valid = bool(cfg.address and cfg.port and (cfg.uuid_or_password or not needs_credentials))
     return cfg
+
+
+def shadowsocks_uri_parts(line: str):
+    """Decode SIP002 or legacy credentials before parsing the endpoint.
+
+    Legacy Base64 is case-sensitive connection data, never a DNS hostname.
+    Percent decoding applies to plain SIP002 userinfo, not a decoded password.
+    """
+    if "://" not in line:
+        raise ValueError("shadowsocks scheme is missing")
+    body = line.split("://", 1)[1].split("#", 1)[0]
+    if "@" in body:
+        userinfo, hostpart = body.rsplit("@", 1)
+        userinfo = unquote(userinfo)
+        decoded_userinfo = userinfo if ":" in userinfo else safe_b64decode(userinfo)
+    else:
+        payload, _, query = body.partition("?")
+        decoded_all = safe_b64decode(payload)
+        if not decoded_all or "@" not in decoded_all:
+            raise ValueError("shadowsocks decode failed")
+        decoded_userinfo, hostpart = decoded_all.rsplit("@", 1)
+        if query:
+            hostpart += ("&" if "?" in hostpart else "?") + query
+
+    if not decoded_userinfo or ":" not in decoded_userinfo:
+        raise ValueError("shadowsocks missing method:password")
+    method, password = decoded_userinfo.split(":", 1)
+    endpoint = urlparse("ss://" + hostpart)
+    # Accessing port validates range and supports bracketed IPv6.
+    if not method or not password or not endpoint.hostname or not endpoint.port:
+        raise ValueError("shadowsocks missing connection fields")
+    return method, password, endpoint
 
 
 def _parse_shadowsocks(line: str) -> ParsedConfig:
     cfg = ParsedConfig(raw=line, protocol="shadowsocks")
-    body = line[len("ss://"):]
-    name = ""
-    if "#" in body:
-        body, name = body.split("#", 1)
-        name = unquote(name)
-
-    if "@" in body:
-        userinfo, hostpart = body.rsplit("@", 1)
-        decoded_userinfo = safe_b64decode(userinfo) or userinfo
-    else:
-        decoded_all = safe_b64decode(body)
-        if not decoded_all or "@" not in decoded_all:
-            cfg.reject_reason = "shadowsocks decode failed"
-            return cfg
-        decoded_userinfo, hostpart = decoded_all.rsplit("@", 1)
-
-    if ":" not in decoded_userinfo:
-        cfg.reject_reason = "shadowsocks missing method:password"
-        return cfg
-    _, password = decoded_userinfo.split(":", 1)
-    cfg.uuid_or_password = password
-
-    host, _, port_str = hostpart.partition(":")
-    port_str = port_str.split("/")[0].split("?")[0]
-    cfg.address = host
     try:
-        cfg.port = int(port_str)
-    except ValueError:
-        cfg.port = 0
+        _, cfg.uuid_or_password, endpoint = shadowsocks_uri_parts(line)
+        cfg.address = endpoint.hostname or ""
+        cfg.port = endpoint.port or 0
+    except ValueError as exc:
+        cfg.reject_reason = str(exc)
+        return cfg
 
+    name = unquote(line.split("#", 1)[1]) if "#" in line else ""
     cfg.name = name or f"ss-{cfg.address}"
     cfg.security = "none"
     cfg.tls = False
@@ -335,8 +348,17 @@ def load_json(path: str, default):
 
 
 def save_json(path: str, data) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    directory = os.path.dirname(os.path.abspath(path))
+    fd, temporary = tempfile.mkstemp(prefix=".snapshot-", suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def config_to_dict(cfg: ParsedConfig) -> dict:

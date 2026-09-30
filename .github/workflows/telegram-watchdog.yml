@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   ensure-publisher:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -58,12 +58,15 @@ jobs:
           import json
           import os
           import sys
+          import time
 
           sys.path.insert(0, "scripts")
           from telegram_destinations import decrypt_store
+          from telegram_admin_policy import administration, next_allowed_at
 
           path = "botstate/telegram_destinations.json"
           enabled = False
+          now = time.time()
           if os.path.exists(path):
               with open(path, "r", encoding="utf-8") as f:
                   store = decrypt_store(json.load(f))
@@ -71,6 +74,7 @@ jobs:
                   isinstance(item, dict)
                   and item.get("enabled") is True
                   and item.get("bot_status") == "administrator"
+                  and next_allowed_at(item, {}, now, administration(store)["pause_until"]) <= now
                   for item in store.get("destinations", [])
               )
 

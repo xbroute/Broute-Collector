@@ -11,6 +11,7 @@
     status: null,
     servers: [],
     filtered: [],
+    visibleLimit: 200,
   };
 
   const HEX_COLOR_RE = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
@@ -85,7 +86,7 @@
         const row = document.createElement("div");
         row.className = "protocol-bar-row";
         row.innerHTML = `
-          <span>${protocol}</span>
+          <span>${escapeHTML(protocol)}</span>
           <span class="protocol-bar-track"><span class="protocol-bar-fill" style="width:${(count / max) * 100}%"></span></span>
           <span>${count}</span>`;
         container.appendChild(row);
@@ -117,6 +118,10 @@
     const list = document.getElementById("server-list");
     const empty = document.getElementById("server-empty");
     list.innerHTML = "";
+    const shown = Math.min(servers.length, state.visibleLimit);
+    document.getElementById("server-results-count").textContent = servers.length
+      ? `نمایش ${shown} از ${servers.length} سرور` : "";
+    document.getElementById("load-more-btn").hidden = shown >= servers.length;
 
     if (!servers.length) {
       empty.hidden = false;
@@ -125,24 +130,28 @@
     empty.hidden = true;
 
     const frag = document.createDocumentFragment();
-    servers.slice(0, 200).forEach(s => {
+    servers.slice(0, state.visibleLimit).forEach(s => {
       const card = document.createElement("div");
       card.className = "server-card glass";
-      const statusClass = s.status === "online" ? "status-online" : "status-offline";
+      const statusClass = s.status === "online" ? "status-online"
+        : s.status === "offline" ? "status-offline" : "status-unknown";
+      const statusText = s.status === "online" ? "آنلاین"
+        : s.status === "offline" ? "آفلاین" : "بررسی نشده";
       const secureBadge = s.secure
         ? `<span class="badge badge-secure">TLS/Reality</span>`
         : `<span class="badge badge-insecure">بدون TLS</span>`;
       card.innerHTML = `
         <div class="server-card-top">
           <div>
-            <div class="server-name"><span class="status-dot ${statusClass}"></span>${escapeHTML(s.name || s.address)}</div>
+            <div class="server-name"><span class="status-dot ${statusClass}" aria-label="${statusText}" title="${statusText}"></span>${escapeHTML(s.name || s.address)}</div>
             <div class="server-proto">${escapeHTML(s.protocol)}</div>
           </div>
           ${secureBadge}
         </div>
         <div class="server-meta">
           <span>🌍 ${escapeHTML(s.country_name || "Unknown")}</span>
-          <span>⚡ ${s.latency ? s.latency + "ms" : "—"}</span>
+          <span>⚡ ${s.latency != null ? escapeHTML(s.latency) + "ms" : "—"}</span>
+          <span>${statusText}</span>
           <span>🔌 ${escapeHTML(s.transport || "tcp")}</span>
           <span>📡 ${escapeHTML(s.source_name || "")}</span>
         </div>
@@ -173,8 +182,10 @@
     const country = document.getElementById("filter-country").value;
     const security = document.getElementById("filter-security").value;
     const sortBy = document.getElementById("sort-by").value;
+    const status = document.getElementById("filter-status").value;
+    state.visibleLimit = 200;
 
-    const hasActiveQuery = Boolean(q || protocol || country || security);
+    const hasActiveQuery = Boolean(q || protocol || country || security || status);
     const empty = document.getElementById("server-empty");
 
     if (!hasActiveQuery) {
@@ -182,10 +193,13 @@
       empty.textContent = "برای مشاهده‌ی سرورها، جستجو کنید یا یکی از فیلترها را انتخاب کنید.";
       empty.hidden = false;
       state.filtered = [];
+      document.getElementById("server-results-count").textContent = "";
+      document.getElementById("load-more-btn").hidden = true;
       return;
     }
 
     let result = state.servers.filter(s => {
+      if (status && s.status !== status) return false;
       if (q && !(`${s.name} ${s.address}`.toLowerCase().includes(q))) return false;
       if (protocol && s.protocol !== protocol) return false;
       if (country && s.country_name !== country) return false;
@@ -206,11 +220,29 @@
     renderServerList(result);
   }
 
-  function copyToClipboard(text, message) {
-    navigator.clipboard.writeText(text).then(
-      () => showToast(message || "کپی شد"),
-      () => showToast("کپی ناموفق بود")
-    );
+  async function copyToClipboard(text, message) {
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const input = document.createElement("textarea");
+        const focused = document.activeElement;
+        input.value = text;
+        input.style.position = "fixed";
+        input.style.opacity = "0";
+        document.body.appendChild(input);
+        try {
+          input.select();
+          if (!document.execCommand("copy")) throw new Error("clipboard unavailable");
+        } finally {
+          input.remove();
+          focused?.focus();
+        }
+      }
+      showToast(message || "کپی شد");
+    } catch {
+      showToast("کپی ناموفق بود؛ دسترسی کلیپ‌بورد را بررسی کنید");
+    }
   }
 
   let toastTimer = null;
@@ -235,17 +267,21 @@
     const container = document.getElementById("qr-code-container");
 
     document.getElementById("show-qr-btn").addEventListener("click", () => {
+      if (typeof QRCode !== "function") {
+        showToast("بارگذاری QR Code کامل نشده؛ دوباره تلاش کنید");
+        return;
+      }
       container.innerHTML = "";
       new QRCode(container, {
         text: subscriptionUrl(),
         width: 220,
         height: 220,
       });
-      modal.hidden = false;
+      openModal(modal);
     });
 
-    document.getElementById("qr-close").addEventListener("click", () => { modal.hidden = true; });
-    modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
+    document.getElementById("qr-close").addEventListener("click", () => closeModal(modal));
+    modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(modal); });
 
     document.getElementById("qr-download").addEventListener("click", () => {
       const canvas = container.querySelector("canvas");
@@ -258,11 +294,46 @@
   }
 
   function setupFilterListeners() {
-    ["search-input", "filter-protocol", "filter-country", "filter-security", "sort-by"].forEach(id => {
+    ["search-input", "filter-protocol", "filter-country", "filter-security", "filter-status", "sort-by"].forEach(id => {
       document.getElementById(id).addEventListener("input", applyFilters);
       document.getElementById(id).addEventListener("change", applyFilters);
     });
     document.getElementById("refresh-btn").addEventListener("click", () => location.reload());
+    document.getElementById("load-more-btn").addEventListener("click", () => {
+      state.visibleLimit += 200;
+      renderServerList(state.filtered);
+    });
+  }
+
+  const modalReturnFocus = new WeakMap();
+  function openModal(modal) {
+    const active = document.activeElement;
+    const parent = active?.closest(".modal-overlay");
+    modalReturnFocus.set(modal, (parent && modalReturnFocus.get(parent)) || active);
+    modal.hidden = false;
+    modal.querySelector("button, a[href], [tabindex='0']")?.focus();
+  }
+
+  function closeModal(modal, restoreFocus = true) {
+    modal.hidden = true;
+    if (restoreFocus) modalReturnFocus.get(modal)?.focus();
+  }
+
+  function setupModalKeyboard() {
+    document.addEventListener("keydown", event => {
+      const modal = document.querySelector(".modal-overlay:not([hidden])");
+      if (!modal) return;
+      if (event.key === "Escape") closeModal(modal);
+      if (event.key !== "Tab") return;
+      const items = [...modal.querySelectorAll("button:not([disabled]), a[href], [tabindex='0']")];
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault(); last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault(); first?.focus();
+      }
+    });
   }
 
   function typeHeading() {
@@ -311,12 +382,12 @@
         item.className = "platform-app-item";
         item.innerHTML = `<span class="platform-app-emoji">${app.emoji}</span><span>${escapeHTML(app.name)}</span>`;
         item.addEventListener("click", () => {
-          platformModal.hidden = true;
           openAppDetail(platformKey, index);
+          closeModal(platformModal, false);
         });
         platformList.appendChild(item);
       });
-      platformModal.hidden = false;
+      openModal(platformModal);
     }
 
     function openAppDetail(platformKey, appIndex) {
@@ -331,22 +402,22 @@
         li.textContent = step;
         detailSteps.appendChild(li);
       });
-      detailModal.hidden = false;
+      openModal(detailModal);
     }
 
     document.querySelectorAll(".platform-card").forEach(btn => {
       btn.addEventListener("click", () => openPlatformModal(btn.getAttribute("data-platform")));
     });
 
-    document.getElementById("platform-apps-close").addEventListener("click", () => { platformModal.hidden = true; });
-    platformModal.addEventListener("click", (e) => { if (e.target === platformModal) platformModal.hidden = true; });
+    document.getElementById("platform-apps-close").addEventListener("click", () => closeModal(platformModal));
+    platformModal.addEventListener("click", (e) => { if (e.target === platformModal) closeModal(platformModal); });
 
-    document.getElementById("app-detail-close").addEventListener("click", () => { detailModal.hidden = true; });
+    document.getElementById("app-detail-close").addEventListener("click", () => closeModal(detailModal));
     document.getElementById("app-detail-back").addEventListener("click", () => {
-      detailModal.hidden = true;
+      closeModal(detailModal, false);
       if (currentPlatformKey) openPlatformModal(currentPlatformKey);
     });
-    detailModal.addEventListener("click", (e) => { if (e.target === detailModal) detailModal.hidden = true; });
+    detailModal.addEventListener("click", (e) => { if (e.target === detailModal) closeModal(detailModal); });
   }
 
   async function init() {
@@ -360,7 +431,8 @@
 
     state.brand = brand;
     state.status = status;
-    state.servers = Array.isArray(servers) ? servers : [];
+    state.servers = Array.isArray(servers) ? servers.filter(s => s && s.valid === true
+      && !s.should_remove && !s.source_unavailable) : [];
 
     applyBrand(brand);
     renderStats(status);
@@ -374,6 +446,7 @@
     setupDeepLinks();
     setupQRModal();
     setupPlatformModals();
+    setupModalKeyboard();
   }
 
   document.addEventListener("DOMContentLoaded", init);

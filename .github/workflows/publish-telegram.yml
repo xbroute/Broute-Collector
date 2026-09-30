@@ -9,6 +9,7 @@ on:
       - "scripts/telegram_publisher.py"
       - "scripts/telegram_multi_publisher.py"
       - "scripts/telegram_destinations.py"
+      - "scripts/telegram_admin_policy.py"
       - "scripts/telegram_publisher_control.py"
       - "scripts/telegram_copy_format.py"
       - "scripts/telegram_promo_config.py"
