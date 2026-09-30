@@ -1072,6 +1072,14 @@ def install(control: Any) -> Callable[[], None]:
                 latest = panel.load()
                 latest["administration"]["sessions"].pop(str(user_id), None)
                 panel.save(latest, user_id)
+        except RuntimeError as exc:
+            if getattr(exc, "hostname", None) != "api.telegram.org" or getattr(exc, "status_code", None) not in {400, 403, 404}:
+                raise
+            # Invalid chat IDs / permanently missing permissions are command
+            # failures, not transient outages that should block the entire poll.
+            if callback_id:
+                control.answer_callback(callback_id, "مقصد یا دسترسی معتبر نیست")
+            panel.say(chat_id, "❌ تلگرام مقصد یا دسترسی درخواست‌شده را نپذیرفت؛ شناسه و ادمینی بات را بررسی کنید.")
         except ValueError as exc:
             if callback_id:
                 control.answer_callback(callback_id, "درخواست پذیرفته نشد")

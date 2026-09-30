@@ -351,6 +351,18 @@ class AdminPanelTests(unittest.TestCase):
             self.send("/target_register -2002")
         self.assertEqual(len(self.fake.get_store()["destinations"]), 1)
 
+    def test_unknown_telegram_chat_does_not_poison_later_off_command(self):
+        original = self.fake.telegram_api
+        def api(method, payload):
+            if method == "getChat":
+                raise control_base.RemoteHTTPError(400, "api.telegram.org")
+            return original(method, payload)
+        with patch.object(self.fake, "telegram_api", side_effect=api):
+            self.assertIn("نپذیرفت", self.send("/target_register -9999999"))
+            self.fake.enabled = True
+            self.send("/publisher_off")
+        self.assertFalse(self.fake.enabled)
+
     def test_bulk_off_is_immediate_and_bulk_on_requires_confirmation_and_permissions(self):
         self.send("/targets_off", actor=9)
         self.assertFalse(self.fake.get_store()["destinations"][0]["enabled"])
