@@ -470,7 +470,7 @@ def install(control: Any) -> Callable[[], None]:
             "chore: register encrypted Telegram destination [automated]",
         )
 
-    def process_action(action, *, user_id, chat_id, thread_id, callback_id=None):
+    def apply_action(action, *, user_id, chat_id, thread_id, callback_id=None):
         if action == "target_membership":
             _membership(user_id, chat_id)
             return
@@ -666,6 +666,18 @@ def install(control: Any) -> Callable[[], None]:
             "✅ تنظیم مقصد ذخیره شد.\n\n" + _target_text(persisted_item),
             keyboard=_target_keyboard(persisted_item),
         )
+
+    def process_action(action, *, user_id, chat_id, thread_id, callback_id=None):
+        try:
+            return apply_action(action, user_id=user_id, chat_id=chat_id,
+                                thread_id=thread_id, callback_id=callback_id)
+        except DestinationValidationError as exc:
+            # A bad selector/template/interval is a permanent user-input error,
+            # not a transient failure. Reply once, then consume this update so
+            # a later /publisher_off is never trapped behind it.
+            if callback_id:
+                control.answer_callback(callback_id, "درخواست معتبر نیست")
+            control.safe_send_text(chat_id, f"❌ {exc}", thread_id=thread_id)
 
     control.update_to_action = update_to_action
     control.process_action = process_action

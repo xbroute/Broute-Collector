@@ -198,7 +198,7 @@ def telegram_fingerprint(server: Dict) -> str:
         try:
             parsed = urlsplit(raw.split("#", 1)[0])
             query_pairs = sorted(
-                (str(k).lower(), str(v))
+                (str(k), str(v))
                 for k, v in parse_qsl(parsed.query, keep_blank_values=True)
             )
             query_map: Dict[str, List[str]] = {}
@@ -214,15 +214,20 @@ def telegram_fingerprint(server: Dict) -> str:
             address = parsed.hostname or ""
             address_key = "<cdn-front>" if _is_ip(address) and host_hint else address.lower()
 
+            connection = {
+                "scheme": parsed.scheme.lower(),
+                "username": unquote(parsed.username or ""),
+                "password": unquote(parsed.password or ""),
+                "address": address_key,
+                "port": parsed.port or 0,
+                "query": query_pairs,
+            }
+            # Preserve the existing fingerprint for ordinary empty-path URIs,
+            # while retaining a meaningful URI path when one is supplied.
+            if parsed.path:
+                connection["path"] = parsed.path
             canonical = json.dumps(
-                {
-                    "scheme": parsed.scheme.lower(),
-                    "username": unquote(parsed.username or ""),
-                    "password": unquote(parsed.password or ""),
-                    "address": address_key,
-                    "port": parsed.port or 0,
-                    "query": query_pairs,
-                },
+                connection,
                 ensure_ascii=False,
                 sort_keys=True,
                 separators=(",", ":"),
@@ -463,6 +468,10 @@ class TransientTelegramError(RuntimeError):
     pass
 
 
+class TelegramRejectedError(RuntimeError):
+    """A definitive API rejection, distinct from an ambiguous lost response."""
+
+
 def _telegram_request_once(token: str, payload: Dict) -> Dict:
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     request = Request(
@@ -491,9 +500,9 @@ def _telegram_request_once(token: str, payload: Dict) -> Dict:
             raise RateLimited(int(retry_after)) from exc
         if exc.code in {500, 502, 503, 504}:
             raise TransientTelegramError(f"Telegram HTTP {exc.code}") from exc
-        raise RuntimeError(f"Telegram HTTP {exc.code}: {body}") from exc
+        raise TelegramRejectedError(f"Telegram HTTP {exc.code}; request rejected") from None
     except (URLError, TimeoutError) as exc:
-        raise TransientTelegramError(f"Telegram connection error: {exc}") from exc
+        raise TransientTelegramError(f"Telegram connection error ({type(exc).__name__})") from None
 
 
 def send_message(token: str, chat_id: str, topic_id: int, text: str) -> None:

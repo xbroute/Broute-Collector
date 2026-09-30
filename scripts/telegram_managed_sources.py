@@ -63,8 +63,21 @@ def source_secret() -> str:
     return token
 
 
+def _secret_candidates(secret: str | None = None) -> List[str]:
+    if secret is not None:
+        if not secret.strip():
+            raise SourceCryptoError("explicit managed-source secret is empty")
+        return [secret]
+    values = [os.environ.get("TELEGRAM_SOURCE_ENCRYPTION_KEY", "").strip(),
+              os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()]
+    candidates = list(dict.fromkeys(value for value in values if value))
+    if not candidates:
+        raise SourceCryptoError("managed-source encryption secret is required")
+    return candidates
+
+
 def _fernet(secret: str | None = None) -> Fernet:
-    value = (secret if secret is not None else source_secret()).encode("utf-8")
+    value = _secret_candidates(secret)[0].encode("utf-8")
     digest = hashlib.sha256(b"broute-managed-subscriptions-v1\0" + value).digest()
     return Fernet(base64.urlsafe_b64encode(digest))
 
@@ -80,20 +93,29 @@ def encrypt_sources(sources: List[Dict[str, Any]], secret: str | None = None) ->
 
 
 def decrypt_sources(payload: Dict[str, Any], secret: str | None = None) -> List[Dict[str, Any]]:
+    if not isinstance(payload, dict):
+        raise SourceCryptoError("managed-source envelope must be a JSON object")
     if not payload:
         return []
-    if int(payload.get("version", 0) or 0) != SOURCE_STATE_VERSION:
+    if payload.get("version") != SOURCE_STATE_VERSION:
         raise SourceCryptoError("unsupported managed-source state version")
     ciphertext = str(payload.get("ciphertext") or "")
     if not ciphertext:
-        return []
-    try:
-        decoded = _fernet(secret).decrypt(ciphertext.encode("ascii"))
-        data = json.loads(decoded.decode("utf-8"))
-    except (InvalidToken, ValueError, json.JSONDecodeError) as exc:
+        raise SourceCryptoError("managed-source ciphertext is missing")
+    data = None
+    for candidate in _secret_candidates(secret):
+        try:
+            decoded = _fernet(candidate).decrypt(ciphertext.encode("ascii"))
+            data = json.loads(decoded.decode("utf-8"))
+            break
+        except (InvalidToken, ValueError, UnicodeError):
+            continue
+    if data is None:
         raise SourceCryptoError(
             "managed-source state could not be decrypted; check the encryption secret"
-        ) from exc
+        )
+    if not isinstance(data, dict) or "sources" not in data:
+        raise SourceCryptoError("managed-source plaintext has invalid structure")
     sources = data.get("sources", []) if isinstance(data, dict) else []
     if not isinstance(sources, list):
         raise SourceCryptoError("managed-source plaintext has invalid structure")
@@ -102,7 +124,9 @@ def decrypt_sources(payload: Dict[str, Any], secret: str | None = None) -> List[
 
 def normalize_subscription_url(url: str) -> str:
     value = str(url or "").strip()
-    if not value or any(ch.isspace() for ch in value):
+    if len(value) > 8192:
+        raise SourceValidationError("طول لینک subscription بیش از حد مجاز است")
+    if not value or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value):
         raise SourceValidationError("لینک subscription خالی یا دارای فاصله است")
 
     try:
@@ -121,7 +145,10 @@ def normalize_subscription_url(url: str) -> str:
     if port is not None and not (1 <= port <= 65535):
         raise SourceValidationError("پورت لینک معتبر نیست")
 
-    host = parts.hostname.encode("idna").decode("ascii").lower().rstrip(".")
+    try:
+        host = parts.hostname.encode("idna").decode("ascii").lower().rstrip(".")
+    except UnicodeError:
+        raise SourceValidationError("hostname لینک معتبر نیست") from None
     if host in {"localhost", "localhost.localdomain"} or host.endswith(".local"):
         raise SourceValidationError("آدرس local/private به‌عنوان منبع پذیرفته نمی‌شود")
 

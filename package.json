@@ -1,0 +1,10 @@
+{
+  "name": "broute-collector-tests",
+  "private": true,
+  "scripts": {
+    "test:browser": "node tests/browser_smoke.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.62.1"
+  }
+}

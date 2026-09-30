@@ -59,16 +59,14 @@ def _save_sources_verified(control: Any, sources: List[Dict[str, Any]], message:
     control.write_repo_json(SOURCE_STATE_PATH, SOURCE_STATE_BRANCH, payload, message)
 
     # Never tell the admin that a mutation succeeded until the encrypted state
-    # can be read back and the exact source IDs match.
+    # can be read back and all source settings match.
     verify_payload = control.read_repo_json(SOURCE_STATE_PATH, SOURCE_STATE_BRANCH, {})
     try:
         persisted = decrypt_sources(verify_payload)
     except SourceCryptoError as exc:
         raise control.RetryableCommandError(f"could not verify persisted sources: {exc}") from exc
 
-    expected_ids = [str(item.get("id") or "") for item in sources]
-    persisted_ids = [str(item.get("id") or "") for item in persisted]
-    if persisted_ids != expected_ids:
+    if persisted != sources:
         raise control.RetryableCommandError("subscription source read-back mismatch")
 
 

@@ -3,26 +3,36 @@ collector.py
 دریافت محتوای خام از منابع مشخص‌شده در data/sources.json (فقط Allowlist).
 هیچ منبع ناشناسی به‌صورت خودکار اضافه یا Discover نمی‌شود.
 
-خروجی: یک لیست از دیکشنری {"source_name", "source_url", "content"} که در
-مرحله بعد توسط parser.py پردازش می‌شود.
+خروجی: رکوردهای {"source_name", "source_url", "content"} برای parser.py؛
+رکورد دریافت ناموفق همچنین دارای fetch_failed=True است.
 """
 from __future__ import annotations
 
 import html
+import http.client
 import re
 import sys
 import time
 import urllib.request
 import urllib.error
-from typing import List, Dict
+from typing import Any, List, Dict
+from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import urlsplit
 
 from common import load_json
 
 SOURCES_PATH = "data/sources.json"
 TELEGRAM_PREVIEW_URL = "https://telegram.me/s/{channel}"
 
+
+class SourceFetchError(RuntimeError):
+    """A failed request is different from a successfully emptied source."""
+
+
 def fetch_url(url: str, timeout: int, max_size: int, retries: int, user_agent: str) -> str:
     """دریافت محتوای یک URL با Timeout، Retry محدود و محدودیت حجم فایل."""
+    if urlsplit(url).scheme.lower() not in {"http", "https"}:
+        raise SourceFetchError("source must use HTTP(S)")
     last_error = None
     for attempt in range(retries + 1):
         try:
@@ -32,16 +42,21 @@ def fetch_url(url: str, timeout: int, max_size: int, retries: int, user_agent: s
                 if len(data) > max_size:
                     raise ValueError("file too large, skipped")
                 return data.decode("utf-8", errors="ignore")
-        except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
             last_error = exc
-            time.sleep(1)
-    print(f"[collector] failed to fetch {url}: {last_error}", file=sys.stderr)
-    return ""
+            if isinstance(exc, ValueError):
+                break  # An oversized response cannot improve by retrying.
+            if attempt < retries:
+                time.sleep(1)
+    code = getattr(last_error, "code", None)
+    reason = f"HTTP {code}" if code else type(last_error).__name__
+    raise SourceFetchError(f"source fetch failed ({reason})") from last_error
 
 
 def strip_html(raw_html: str) -> str:
     """حذف تگ‌های HTML و Decode کردن Entity ها تا فقط متن خام پیام‌ها بماند."""
     text = re.sub(r"<br\s*/?>", "\n", raw_html)
+    text = re.sub(r"</?(?:div|p|pre)\b[^>]*>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"<[^>]+>", " ", text)
     return html.unescape(text)
 
@@ -60,7 +75,7 @@ def fetch_telegram_channel(channel: str, timeout: int, max_size: int, retries: i
     return strip_html(raw_html)
 
 
-def collect() -> List[Dict[str, str]]:
+def collect() -> List[Dict[str, Any]]:
     sources = load_json(SOURCES_PATH, {})
     settings = sources.get("settings", {})
     timeout = int(settings.get("request_timeout_seconds", 10))
@@ -68,37 +83,18 @@ def collect() -> List[Dict[str, str]]:
     retries = int(settings.get("max_retries", 2))
     user_agent = settings.get("user_agent", "config-aggregator-bot/1.0")
 
-    results: List[Dict[str, str]] = []
-
+    requests = []
     for group in ("github_sources", "subscription_sources"):
         for source in sources.get(group, []):
             if not source.get("enabled"):
                 continue
-            url = source["url"]
-            content = fetch_url(url, timeout, max_size, retries, user_agent)
-            if content:
-                results.append({
-                    "source_name": source.get("name", url),
-                    "source_url": url,
-                    "content": content,
-                })
+            requests.append(("url", dict(source)))
 
     # منابع دستی (فایل‌های محلی داخل مخزن)
     for source in sources.get("manual_sources", []):
         if not source.get("enabled"):
             continue
-        path = source.get("path")
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                content = f.read()
-            if content.strip():
-                results.append({
-                    "source_name": source.get("name", path),
-                    "source_url": path,
-                    "content": content,
-                })
-        except FileNotFoundError:
-            continue
+        requests.append(("manual", dict(source)))
 
     # منابع تلگرام: فقط کانال‌های عمومی، از طریق صفحه‌ی پیش‌نمایش رسمی خود
     # تلگرام (t.me/s/channel) که بدون لاگین یا API Key در دسترس است.
@@ -106,20 +102,40 @@ def collect() -> List[Dict[str, str]]:
     for source in sources.get("telegram_sources", []):
         if not source.get("enabled"):
             continue
-        channel = source.get("channel")
-        if not channel:
-            print(f"[collector] telegram source '{source.get('name')}' has no 'channel' field, skipped",
-                  file=sys.stderr)
-            continue
-        content = fetch_telegram_channel(channel, timeout, max_size, retries, user_agent)
-        if content:
-            results.append({
-                "source_name": source.get("name", channel),
-                "source_url": TELEGRAM_PREVIEW_URL.format(channel=channel.lstrip("@")),
-                "content": content,
-            })
+        requests.append(("telegram", dict(source)))
 
-    return results
+    def fetch_source(request):
+        kind, source = request
+        channel = str(source.get("channel") or "").strip().lstrip("@")
+        url = (TELEGRAM_PREVIEW_URL.format(channel=channel) if kind == "telegram"
+               else str(source.get("path" if kind == "manual" else "url") or ""))
+        result = {"source_name": str(source.get("name") or url),
+                  "source_url": url, "content": ""}
+        try:
+            if kind == "manual":
+                with open(url, "r", encoding="utf-8") as f:
+                    result["content"] = f.read(max_size + 1)
+                if len(result["content"].encode("utf-8")) > max_size:
+                    raise SourceFetchError("manual source is too large")
+            elif kind == "telegram":
+                if not re.fullmatch(r"[A-Za-z0-9_]+", channel):
+                    raise SourceFetchError("invalid Telegram channel name")
+                result["content"] = fetch_telegram_channel(channel, timeout, max_size, retries, user_agent)
+            else:
+                result["content"] = fetch_url(url, timeout, max_size, retries, user_agent)
+        except (SourceFetchError, OSError, ValueError) as exc:
+            result["fetch_failed"] = True
+            # URLs may carry credentials. Log the public name and error class.
+            print(f"[collector] source {result['source_name']!r} unavailable ({type(exc).__name__})",
+                  file=sys.stderr, flush=True)
+        return result
+
+    if not requests:
+        return []
+    workers = min(len(requests), max(1, min(10, int(settings.get("fetch_workers", 5)))))
+    # map preserves allowlist order and bounds simultaneous network requests.
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        return list(executor.map(fetch_source, requests))
 
 
 if __name__ == "__main__":

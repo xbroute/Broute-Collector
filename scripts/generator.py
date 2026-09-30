@@ -14,6 +14,7 @@ import base64
 import os
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Tuple
 
 from collector import collect
@@ -28,6 +29,7 @@ MAX_VALIDATIONS_PER_RUN = max(
     int(os.environ.get("MAX_VALIDATIONS_PER_RUN", "500")),
 )
 VALIDATION_WORKERS = 25
+SOURCE_FAILURE_GRACE_SECONDS = max(0, int(os.environ.get("SOURCE_FAILURE_GRACE_SECONDS", "1800")))
 
 SERVERS_PATH = "data/servers.json"
 STATUS_PATH = "data/status.json"
@@ -279,6 +281,7 @@ def write_status(
     servers: List[Dict],
     active_sources: int,
     validation_stats: Dict[str, int] | None = None,
+    collection_stats: Dict[str, int] | None = None,
 ) -> None:
     online = sum(1 for s in servers if s.get("status") == "online")
     offline = sum(1 for s in servers if s.get("status") == "offline")
@@ -303,6 +306,8 @@ def write_status(
             "budget": MAX_VALIDATIONS_PER_RUN,
             **{key: int(value) for key, value in validation_stats.items()},
         }
+    if collection_stats:
+        status["collection"] = collection_stats
     save_json(STATUS_PATH, status)
 
 
@@ -312,6 +317,47 @@ def count_active_sources() -> int:
     for group in ("github_sources", "subscription_sources", "manual_sources", "telegram_sources"):
         count += sum(1 for s in sources.get(group, []) if s.get("enabled"))
     return count
+
+
+def retain_unavailable_sources(previous: List[Dict], current: List[Dict], raw_sources: List[Dict]) -> List[Dict]:
+    """Keep bounded recovery history for failed fetches, never advertise it.
+
+    Successful empty responses and disabled/deleted sources remove their old
+    configs immediately. A network failure keeps only failed-source provenance
+    for 30 minutes with unknown status, excluded from subscriptions/publishing.
+    """
+    failed = {str(s.get("source_url") or "") for s in raw_sources if s.get("fetch_failed")}
+    failed -= {str(s.get("source_url") or "") for s in raw_sources if not s.get("fetch_failed")}
+    if not failed or not SOURCE_FAILURE_GRACE_SECONDS:
+        return []
+    present = {str(s.get("id") or "") for s in current}
+    now = datetime.now(timezone.utc)
+    retained = []
+    for server in previous:
+        if not isinstance(server, dict) or not server.get("raw") or server.get("valid") is not True:
+            continue
+        key = canonical_raw_connection_key(str(server["raw"]), str(server.get("protocol") or ""))
+        if key in present:
+            continue
+        refs = [s for s in _safe_sources(server) if s["source_url"] in failed]
+        if not refs:
+            continue
+        try:
+            since = datetime.fromisoformat(str(server.get("source_failure_since") or "").replace("Z", "+00:00"))
+            if since.tzinfo is None:
+                since = since.replace(tzinfo=timezone.utc)
+        except ValueError:
+            since = now
+        if (now - since).total_seconds() >= SOURCE_FAILURE_GRACE_SECONDS:
+            continue
+        record = dict(server)
+        record.update(id=key, sources=refs, source_name=refs[0]["source_name"],
+                      source_url=refs[0]["source_url"], status="unknown", latency=None,
+                      source_unavailable=True,
+                      source_failure_since=since.isoformat().replace("+00:00", "Z"))
+        retained.append(record)
+        present.add(key)
+    return retained
 
 
 def main() -> None:
@@ -332,14 +378,18 @@ def main() -> None:
     )
     validated_records, validation_stats = run_validation(records, matched_previous)
 
-    # records are derived exclusively from the *current* source contents. A
-    # config removed from every live subscription therefore disappears here,
-    # while a current config never disappears merely because validation budget
-    # was exhausted.
+    retained = retain_unavailable_sources(previous_servers_list, validated_records, raw_sources)
+    validated_records.extend(retained)
+    failed_sources = sum(1 for source in raw_sources if source.get("fetch_failed"))
+    collection_stats = {"requested": len(raw_sources), "succeeded": len(raw_sources) - failed_sources,
+                        "failed": failed_sources, "retained_unavailable_configs": len(retained)}
+
+    # Successful source contents are authoritative. Temporary fetch failures
+    # retain bounded, explicitly unavailable recovery records only.
     save_json(SERVERS_PATH, validated_records)
 
     write_output_files(validated_records)
-    write_status(validated_records, count_active_sources(), validation_stats)
+    write_status(validated_records, count_active_sources(), validation_stats, collection_stats)
 
     print(
         f"[generator] done. {len(validated_records)} current unique configs written; "

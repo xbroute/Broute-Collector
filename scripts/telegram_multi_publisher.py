@@ -16,6 +16,7 @@ import time
 from typing import Any, Dict, List, Set, Tuple
 
 import telegram_publisher as base
+import telegram_admin_policy as admin_policy
 from telegram_copy_format import CopyableTelegramMessage, decorate_send_payload
 from telegram_destinations import (
     DEFAULT_TEMPLATE,
@@ -52,15 +53,20 @@ RUN_STOP_RESERVE_SECONDS = int(
 STATE_PUSH_RETRIES = max(
     1, int(os.environ.get("TELEGRAM_STATE_PUSH_RETRIES", "5"))
 )
-REQUEST_RETRIES = max(
-    1, int(os.environ.get("TELEGRAM_REQUEST_RETRIES", "4"))
-)
 MAX_TEXT_LENGTH = 4096
 STATE_VERSION = 1
 
 
 class PublishingDisabled(RuntimeError):
     pass
+
+
+class DestinationChanged(RuntimeError):
+    pass
+
+
+class DeliveryUncertain(RuntimeError):
+    """Telegram may have accepted a message whose response was lost."""
 
 
 def _git(
@@ -109,6 +115,16 @@ def _default_target_state() -> Dict[str, Any]:
         "cycle_started_at": "",
         "suspended_until": 0,
         "last_error": "",
+        "total_sent": 0,
+        "last_sent_at": 0,
+        "daily_date": "",
+        "daily_sent": 0,
+        "consecutive_failures": 0,
+        "retry_generation": 0,
+        "queue_revision": 0,
+        "pending_delivery": None,
+        "uncertain_deliveries": {},
+        "applied_resolutions": {},
     }
 
 
@@ -122,25 +138,72 @@ def _normalize_target_state(raw: Any) -> Dict[str, Any]:
         state["cycle"] = max(1, int(data.get("cycle", 1) or 1))
     except (TypeError, ValueError):
         state["cycle"] = 1
-    for key in ("next_send_after", "suspended_until"):
+    for key in ("next_send_after", "suspended_until", "total_sent", "last_sent_at", "daily_sent", "consecutive_failures", "retry_generation", "queue_revision"):
         try:
             state[key] = max(0, int(float(data.get(key, 0) or 0)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             state[key] = 0
+    state["daily_date"] = str(data.get("daily_date") or "")[:10]
     state["cycle_started_at"] = str(data.get("cycle_started_at") or "")
     state["last_error"] = str(data.get("last_error") or "")[:500]
+    pending = data.get("pending_delivery")
+    uncertain = data.get("uncertain_deliveries", {})
+    applied = data.get("applied_resolutions", {})
+    if not isinstance(uncertain, dict) or not isinstance(applied, dict) or pending is not None and not isinstance(pending, dict):
+        raise RuntimeError("publisher delivery journal is invalid; refusing to reset it")
+    def attempt(raw):
+        if (not isinstance(raw, dict) or not isinstance(raw.get("fingerprint"), str)
+                or not raw.get("fingerprint") or not isinstance(raw.get("server_id"), str)
+                or not raw.get("server_id")):
+            raise RuntimeError("publisher delivery attempt is invalid")
+        try:
+            at = admin_policy.integer(raw.get("at", 0))
+        except admin_policy.PolicyError as exc:
+            raise RuntimeError("publisher delivery timestamp is invalid") from exc
+        return {"server_id": raw["server_id"], "fingerprint": raw["fingerprint"], "at": at}
+    state["pending_delivery"] = attempt(pending) if pending is not None else None
+    state["uncertain_deliveries"] = {str(key): attempt(value) for key, value in uncertain.items()}
+    if any(key != value["server_id"] for key, value in state["uncertain_deliveries"].items()):
+        raise RuntimeError("publisher uncertain delivery identity is invalid")
+    if any(not isinstance(value, str) for value in applied.values()):
+        raise RuntimeError("publisher applied delivery decisions are invalid")
+    state["applied_resolutions"] = dict(applied)
     return state
 
 
 def load_state() -> Dict[str, Any]:
-    raw = _read_json(STATE_PATH, {})
-    if not isinstance(raw, dict):
+    try:
+        with open(STATE_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except FileNotFoundError:
         raw = {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError("publisher state is unreadable; refusing to reset sent history") from exc
+    if not isinstance(raw, dict):
+        raise RuntimeError("publisher state must be a JSON object")
+    if raw.get("version", STATE_VERSION) != STATE_VERSION:
+        raise RuntimeError("unsupported publisher state version")
     targets = raw.get("destinations", {})
     if not isinstance(targets, dict):
-        targets = {}
+        raise RuntimeError("publisher destination history must be a JSON object")
+    for target in targets.values():
+        if not isinstance(target, dict):
+            raise RuntimeError("publisher target history must be a JSON object")
+        for key in ("sent", "sent_fingerprints", "cycle_sent", "cycle_sent_fingerprints", "queue"):
+            if not isinstance(target.get(key, []), list):
+                raise RuntimeError(f"publisher {key} history must be a JSON array")
+        for key in ("cycle", "next_send_after", "suspended_until", "total_sent", "last_sent_at", "daily_sent", "consecutive_failures", "retry_generation", "queue_revision"):
+            try:
+                int(float(target.get(key, 0) or 0))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise RuntimeError(f"publisher {key} value is invalid") from exc
+    try:
+        bot_next_send_after = max(0, int(raw.get("bot_next_send_after", 0) or 0))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError("publisher bot cooldown is invalid") from exc
     return {
         "version": STATE_VERSION,
+        "bot_next_send_after": bot_next_send_after,
         "destinations": {
             str(chat_id): _normalize_target_state(value)
             for chat_id, value in targets.items()
@@ -164,6 +227,7 @@ def _aggregate_compatibility(state: Dict[str, Any]) -> Dict[str, Any]:
         queue.extend(f"{chat_id}:{server_id}" for server_id in target["queue"])
     payload = {
         "version": STATE_VERSION,
+        "bot_next_send_after": state.get("bot_next_send_after", 0),
         "destinations": state.get("destinations", {}),
         "sent": sorted(sent),
         "sent_fingerprints": sorted(sent_fps),
@@ -202,14 +266,22 @@ def checkpoint_state(state: Dict[str, Any], reason: str) -> None:
 
     diff = _git(["diff", "--cached", "--quiet"], state_dir)
     if diff.returncode == 0:
-        return
-
-    commit = _git(
-        ["commit", "-m", f"chore: checkpoint multi-destination Telegram state ({reason}) [automated]"],
-        state_dir,
-    )
-    if commit.returncode != 0:
-        raise RuntimeError(commit.stderr.strip() or "state commit failed")
+        # A previous push may have failed after its local commit succeeded.
+        # No file diff does not prove that the checkpoint is durable remotely.
+        ahead = _git(["rev-list", "--count", "origin/telegram-state..HEAD"], state_dir)
+        if ahead.returncode != 0:
+            raise RuntimeError("could not verify remote publisher checkpoint")
+        if int(ahead.stdout.strip() or "0") == 0:
+            return
+    elif diff.returncode == 1:
+        commit = _git(
+            ["commit", "-m", f"chore: checkpoint multi-destination Telegram state ({reason}) [automated]"],
+            state_dir,
+        )
+        if commit.returncode != 0:
+            raise RuntimeError(commit.stderr.strip() or "state commit failed")
+    else:
+        raise RuntimeError("could not inspect staged publisher state")
 
     last_error = ""
     for attempt in range(1, STATE_PUSH_RETRIES + 1):
@@ -249,6 +321,9 @@ def load_destinations_remote() -> Dict[str, Any]:
             )
             if shown.returncode == 0:
                 return _load_destination_payload_from_text(shown.stdout)
+        # An OFF/remove may have been committed after this checkout. A stale
+        # local file must never override a failed read of the current controls.
+        raise RuntimeError("could not refresh destination controls; publishing paused")
 
     local = _read_json(DESTINATION_FILE, {})
     if isinstance(local, dict) and local:
@@ -356,7 +431,48 @@ def _prioritize_unseen(
     return unseen + recycled
 
 
-def prepare_target_state(target: Dict[str, Any], servers: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+def prepare_target_state(target: Dict[str, Any], servers: List[Dict[str, Any]],
+                         destination: Dict[str, Any] | None = None,
+                         blocked_ids: Set[str] | None = None) -> Dict[str, Dict[str, Any]]:
+    pending = target.get("pending_delivery")
+    if pending is not None:
+        # A run interrupted between a durable intent and its success checkpoint
+        # cannot know whether Telegram accepted that request. Hold it for review.
+        target.setdefault("uncertain_deliveries", {})[pending["server_id"]] = dict(pending)
+        target["pending_delivery"] = None
+    uncertain = target.setdefault("uncertain_deliveries", {})
+    if destination is not None:
+        if destination.get("retry_generation", 0) != target.get("retry_generation", 0):
+            target.update({"retry_generation": destination.get("retry_generation", 0), "suspended_until": 0,
+                           "next_send_after": 0, "last_error": "", "consecutive_failures": 0})
+        if destination.get("queue_revision", 0) != target.get("queue_revision", 0):
+            target["queue_revision"] = destination.get("queue_revision", 0)
+            target["queue"] = []
+        resolutions = destination.get("delivery_resolutions", {})
+        applied = target.setdefault("applied_resolutions", {})
+        for server_id, decision in resolutions.items():
+            if applied.get(server_id) == decision["nonce"]:
+                continue
+            entry = uncertain.pop(server_id, None)
+            if entry is not None and decision["decision"] == "sent":
+                target["sent"] = sorted(set(target.get("sent", [])) | {server_id})
+                target["sent_fingerprints"] = sorted(set(target.get("sent_fingerprints", [])) | {entry["fingerprint"]})
+                target["cycle_sent"] = sorted(set(target.get("cycle_sent", [])) | {server_id})
+                target["cycle_sent_fingerprints"] = sorted(set(target.get("cycle_sent_fingerprints", [])) | {entry["fingerprint"]})
+                target["next_send_after"] = max(target.get("next_send_after", 0), int(time.time()) + destination.get("max_delay_seconds", 90))
+                target["total_sent"] = int(target.get("total_sent", 0)) + 1
+                target["last_sent_at"] = max(target.get("last_sent_at", 0), entry["at"])
+                day = admin_policy.local_day(destination, entry["at"])
+                if day >= str(target.get("daily_date", "")):
+                    target["daily_sent"] = (target.get("daily_sent", 0) if target.get("daily_date") == day else 0) + 1
+                    target["daily_date"] = day
+            applied[server_id] = decision["nonce"]
+        target["applied_resolutions"] = {key: value for key, value in applied.items() if key in resolutions}
+        servers = [server for server in servers if admin_policy.server_matches(server, destination, blocked_ids)]
+    held_ids = set(uncertain)
+    held_fps = {entry["fingerprint"] for entry in uncertain.values()}
+    servers = [server for server in servers if str(server.get("id", "")) not in held_ids
+               and base.telegram_fingerprint(server) not in held_fps]
     cycle_sent = set(target.get("cycle_sent", []))
     cycle_fps = set(target.get("cycle_sent_fingerprints", []))
     online_by_id, queue = _sync_base(
@@ -427,20 +543,19 @@ def render_target_message(
     config = base.brand_raw_config(str(server.get("raw") or ""), protocol)
     values = _template_values(destination, server, config)
 
-    plain = template
-    for key, value in values.items():
-        plain = plain.replace("{" + key + "}", value)
-    if len(plain) > MAX_TEXT_LENGTH:
+    plain = template.format_map(values)
+    if len(plain.encode("utf-16-le")) // 2 > MAX_TEXT_LENGTH:
         raise ValueError("rendered destination message exceeds Telegram 4096-character limit")
 
-    rendered = html.escape(template, quote=False)
-    for key, value in values.items():
-        replacement = (
+    escaped_values = {
+        key: (
             f"<pre>{html.escape(value, quote=False)}</pre>"
             if key == "config"
             else html.escape(value, quote=False)
         )
-        rendered = rendered.replace("{" + key + "}", replacement)
+        for key, value in values.items()
+    }
+    rendered = html.escape(template, quote=False).format_map(escaped_values)
     return CopyableTelegramMessage(rendered, config)
 
 
@@ -498,27 +613,38 @@ def build_payload(
     return payload
 
 
-def send_payload(token: str, payload: Dict[str, Any]) -> None:
-    last_error: Exception | None = None
-    for attempt in range(1, REQUEST_RETRIES + 1):
-        try:
-            result = base._telegram_request_once(token, payload)
-            if not result.get("ok"):
-                raise RuntimeError(f"Telegram API error: {result}")
-            return
-        except base.RateLimited:
-            raise
-        except base.TransientTelegramError as exc:
-            last_error = exc
-            if attempt == REQUEST_RETRIES:
-                break
-            time.sleep(min(2 ** attempt, 15))
-    raise RuntimeError(
-        f"Telegram transient failure after {REQUEST_RETRIES} attempts: {last_error}"
-    )
+def send_payload(token: str, payload: Dict[str, Any], *, before_request=None) -> None:
+    if before_request is not None:
+        before_request()
+    try:
+        result = base._telegram_request_once(token, payload)
+    except (base.TransientTelegramError, ValueError) as exc:
+        # sendMessage has no idempotency key. Retrying a timeout/5xx can publish
+        # twice; journal the uncertainty for an explicit operator decision.
+        raise DeliveryUncertain("Telegram delivery response is uncertain") from exc
+    if not isinstance(result, dict) or not isinstance(result.get("ok"), bool):
+        raise DeliveryUncertain("Telegram returned an invalid delivery response")
+    if not result["ok"]:
+        raise base.TelegramRejectedError("Telegram rejected the message")
+
+
+def ensure_destination_unchanged(expected: Dict[str, Any], target: Dict[str, Any] | None = None,
+                                 server: Dict[str, Any] | None = None) -> None:
+    ensure_global_enabled()
+    store = load_destinations_remote()
+    current = next((item for item in _active_destinations(store)
+                    if str(item["chat_id"]) == str(expected["chat_id"])), None)
+    if current != expected:
+        raise DestinationChanged("destination settings changed before send")
+    if server is not None and not admin_policy.server_matches(server, expected, set(admin_policy.administration(store)["blocked_ids"])):
+        raise DestinationChanged("server blocked or outside publishing filters")
+    if target is not None and admin_policy.next_allowed_at(expected, target, time.time()) > time.time():
+        raise DestinationChanged("publishing window or quota changed before send")
 
 
 def _active_destinations(store: Dict[str, Any]) -> List[Dict[str, Any]]:
+    if admin_policy.administration(store)["pause_until"] > time.time():
+        return []
     return [
         dict(item)
         for item in store.get("destinations", [])
@@ -543,7 +669,11 @@ def _has_work(
 ) -> bool:
     for destination in destinations:
         target = state.get("destinations", {}).get(str(destination["chat_id"]), {})
-        if _normalize_target_state(target).get("queue"):
+        normalized = _normalize_target_state(target)
+        horizon = max(0, RUN_BUDGET_SECONDS - RUN_STOP_RESERVE_SECONDS)
+        due = max(admin_policy.next_allowed_at(destination, normalized, time.time()),
+                  state.get("bot_next_send_after", 0))
+        if normalized.get("queue") and due <= time.time() + horizon:
             return True
     return False
 
@@ -562,7 +692,12 @@ def main() -> int:
         _write_output(False)
         return 0
 
-    state = load_state()
+    try:
+        state = load_state()
+    except RuntimeError as exc:
+        print(f"[telegram-multi] {exc}", file=sys.stderr, flush=True)
+        _write_output(False)
+        return 1
     servers = load_latest_servers()
     last_server_refresh = time.monotonic()
     last_destination_refresh = 0.0
@@ -595,7 +730,8 @@ def main() -> int:
             for destination in destinations:
                 chat_key = str(destination["chat_id"])
                 target = _normalize_target_state(state_targets.get(chat_key))
-                online_maps[chat_key] = prepare_target_state(target, servers)
+                online_maps[chat_key] = prepare_target_state(target, servers, destination,
+                                                           set(admin_policy.administration(destination_store)["blocked_ids"]))
                 state_targets[chat_key] = target
 
             checkpoint_state(state, "queue-sync")
@@ -607,10 +743,9 @@ def main() -> int:
                 target = state_targets[chat_key]
                 if not target.get("queue"):
                     continue
-                suspended = float(target.get("suspended_until", 0) or 0)
                 due = max(
-                    float(target.get("next_send_after", 0) or 0),
-                    suspended,
+                    admin_policy.next_allowed_at(destination, target, now),
+                    float(state.get("bot_next_send_after", 0) or 0),
                 )
                 candidates.append((due, destination))
 
@@ -619,6 +754,10 @@ def main() -> int:
 
             candidates.sort(key=lambda item: item[0])
             due_at, destination = candidates[0]
+            # The watchdog revisits scheduled destinations. Do not spend an
+            # entire Actions run spinning on a quota/window hours in the future.
+            if due_at - now > max(0, deadline - time.monotonic() - RUN_STOP_RESERVE_SECONDS):
+                break
             if due_at > now:
                 sleep_for = min(
                     float(CHECK_INTERVAL_SECONDS),
@@ -649,6 +788,7 @@ def main() -> int:
                 target["queue"] = queue[1:] + [server_id]
                 target["next_send_after"] = int(time.time() + max(15, min(60, int(destination.get("min_delay_seconds", 30)))))
                 target["last_error"] = "live validation failed"
+                target["consecutive_failures"] += 1
                 checkpoint_state(state, "live-skip")
                 continue
 
@@ -668,18 +808,66 @@ def main() -> int:
                 continue
 
             payload = build_payload(destination, message)
+            # Validation and CTA reads can take several seconds. Re-read OFF,
+            # removal, topic and template changes at the actual send boundary.
+            ensure_global_enabled()
+            latest_store = load_destinations_remote()
+            latest_destination = next((item for item in _active_destinations(latest_store)
+                                       if str(item["chat_id"]) == chat_key), None)
+            if latest_destination != destination:
+                destination_store = latest_store
+                last_destination_refresh = 0.0
+                continue
+            if not admin_policy.server_matches(fresh, destination, set(admin_policy.administration(latest_store)["blocked_ids"])):
+                last_destination_refresh = 0.0
+                continue
+            if admin_policy.next_allowed_at(destination, target, time.time()) > time.time():
+                continue
             try:
-                send_payload(token, payload)
+                ensure_destination_unchanged(destination, target, fresh)
+                target["pending_delivery"] = {"server_id": server_id, "fingerprint": fingerprint, "at": int(time.time())}
+                checkpoint_state(state, "send-attempt")
+                send_payload(token, payload,
+                             before_request=lambda: ensure_destination_unchanged(destination, target, fresh))
+            except PublishingDisabled:
+                target["pending_delivery"] = None
+                raise
+            except DestinationChanged:
+                target["pending_delivery"] = None
+                last_destination_refresh = 0.0
+                continue
+            except DeliveryUncertain:
+                target["uncertain_deliveries"][server_id] = dict(target["pending_delivery"])
+                target["pending_delivery"] = None
+                target["queue"] = queue[1:]
+                target["last_error"] = "delivery uncertain; operator review required"
+                target["suspended_until"] = int(time.time() + 600)
+                target["consecutive_failures"] += 1
+                checkpoint_state(state, "delivery-uncertain")
+                continue
             except base.RateLimited as exc:
+                target["pending_delivery"] = None
                 target["next_send_after"] = int(time.time() + max(1, exc.retry_after))
+                state["bot_next_send_after"] = target["next_send_after"]
                 target["last_error"] = f"rate limited for {exc.retry_after}s"
+                target["consecutive_failures"] += 1
                 checkpoint_state(state, "rate-limit")
+                continue
+            except base.TelegramRejectedError:
+                target["pending_delivery"] = None
+                target["suspended_until"] = int(time.time() + 600)
+                target["last_error"] = "Telegram rejected destination message"
+                target["consecutive_failures"] += 1
+                checkpoint_state(state, "destination-rejected")
                 continue
             except Exception as exc:
                 # Do not let one removed/misconfigured chat stop every other
                 # destination. Keep the queue intact and temporarily suspend it.
                 target["suspended_until"] = int(time.time() + 10 * 60)
-                target["last_error"] = str(exc)[:500]
+                # If checkpoint/send raised an unexpected exception, preserve
+                # the intent for restart recovery rather than assuming failure.
+                target["last_error"] = "destination send or checkpoint failed"
+                target["consecutive_failures"] += 1
                 checkpoint_state(state, "destination-error")
                 print(
                     "[telegram-multi] one destination send failed; suspended for 10 minutes.",
@@ -692,6 +880,7 @@ def main() -> int:
             high = int(destination.get("max_delay_seconds", 90))
             delay = random.randint(min(low, high), max(low, high))
             target["queue"] = queue[1:]
+            target["pending_delivery"] = None
             target["sent"] = sorted(set(target.get("sent", [])) | {server_id})
             target["sent_fingerprints"] = sorted(
                 set(target.get("sent_fingerprints", [])) | {fingerprint}
@@ -705,6 +894,7 @@ def main() -> int:
             target["next_send_after"] = int(time.time() + delay)
             target["suspended_until"] = 0
             target["last_error"] = ""
+            admin_policy.record_send(target, destination, time.time())
             checkpoint_state(state, "sent")
             print(
                 f"[telegram-multi] published one config; next slot in {delay}s; "
@@ -730,7 +920,8 @@ def main() -> int:
         return 1
 
     try:
-        destinations = _active_destinations(load_destinations_remote())
+        destination_store = load_destinations_remote()
+        destinations = _active_destinations(destination_store)
     except Exception:
         destinations = _active_destinations(destination_store)
 
@@ -740,7 +931,8 @@ def main() -> int:
     for destination in destinations:
         chat_key = str(destination["chat_id"])
         target = _normalize_target_state(state_targets.get(chat_key))
-        prepare_target_state(target, servers)
+        prepare_target_state(target, servers, destination,
+                             set(admin_policy.administration(destination_store)["blocked_ids"]))
         state_targets[chat_key] = target
 
     checkpoint_state(state, "handoff")
