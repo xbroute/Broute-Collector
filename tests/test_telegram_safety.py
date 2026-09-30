@@ -116,6 +116,24 @@ class TelegramPublisherSafetyTests(unittest.TestCase):
                 multi.load_destinations_remote()
             read.assert_not_called()
 
+    def test_confirmed_missing_destination_file_is_a_legitimate_empty_store(self):
+        results = [subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 128), subprocess.CompletedProcess([], 0, "")]
+        with patch.object(multi.os.path, "isdir", return_value=True), patch.object(multi, "_git", side_effect=results), patch.object(multi, "_read_json") as local:
+            self.assertEqual(multi.load_destinations_remote(), {"manager_user_ids": [], "destinations": []})
+            local.assert_not_called()
+
+    def test_existing_unreadable_destination_file_remains_fail_closed(self):
+        results = [subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 128), subprocess.CompletedProcess([], 0, "100644 blob abc\ttelegram_destinations.json")]
+        with patch.object(multi.os.path, "isdir", return_value=True), patch.object(multi, "_git", side_effect=results):
+            with self.assertRaises(RuntimeError):
+                multi.load_destinations_remote()
+
+    def test_failed_tree_inspection_cannot_turn_read_failure_into_empty_store(self):
+        results = [subprocess.CompletedProcess([], 0), subprocess.CompletedProcess([], 128), subprocess.CompletedProcess([], 128)]
+        with patch.object(multi.os.path, "isdir", return_value=True), patch.object(multi, "_git", side_effect=results):
+            with self.assertRaises(RuntimeError):
+                multi.load_destinations_remote()
+
     def test_corrupt_or_unknown_version_state_never_resets_sent_history(self):
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "state.json"

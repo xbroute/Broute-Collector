@@ -142,7 +142,6 @@ jobs:
           TELEGRAM_RUN_BUDGET_SECONDS: ${{ github.event_name == 'push' && '150' || '540' }}
           TELEGRAM_LIVE_CHECK_RETRIES: "2"
           TELEGRAM_STATE_PUSH_RETRIES: "5"
-          TELEGRAM_REQUEST_RETRIES: "4"
           TELEGRAM_CONTROL_CHECK_INTERVAL_SECONDS: "5"
           TELEGRAM_SERVERS_REFRESH_SECONDS: "60"
         run: python scripts/telegram_multi_publisher.py
@@ -204,7 +203,8 @@ jobs:
         run: |
           echo "No successor run is required. Destination/global state is durable."
 
-      - name: Warn if Telegram publishing failed
+      - name: Fail if Telegram publishing failed
         if: steps.publisher_control.outputs.enabled == 'true' && steps.telegram_publish.outcome == 'failure'
         run: |
           echo "::warning::Telegram multi-destination publisher failed. Durable checkpoints limit duplicate risk; watchdog will retry while master publishing remains ON."
+          exit 1

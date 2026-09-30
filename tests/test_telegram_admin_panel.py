@@ -327,6 +327,30 @@ class AdminPanelTests(unittest.TestCase):
         self.assertFalse(item["enabled"])
         self.assertEqual(item["bot_status"], "cannot_post")
 
+    def test_existing_admin_bot_can_be_registered_without_new_membership_event(self):
+        original = self.fake.telegram_api
+        with patch.object(self.fake, "telegram_api", side_effect=lambda method, payload: {"id": -2002, "title": "Existing channel", "type": "channel"} if method == "getChat" else original(method, payload)):
+            self.send("/target_register @existing_channel")
+        items = self.fake.get_store()["destinations"]
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[-1]["chat_id"], -2002)
+        self.assertFalse(items[-1]["enabled"])
+        self.assertEqual(items[-1]["bot_status"], "administrator")
+
+    def test_destination_registration_requires_actor_to_be_chat_admin(self):
+        original = self.fake.telegram_api
+        self.fake.group_admins = {99}
+        with patch.object(self.fake, "telegram_api", side_effect=lambda method, payload: {"id": -2002, "title": "Existing", "type": "channel"} if method == "getChat" else original(method, payload)):
+            self.assertIn("ادمین همان", self.send("/target_register -2002"))
+        self.assertEqual(len(self.fake.get_store()["destinations"]), 1)
+
+    def test_registration_refuses_destination_without_bot_send_permission(self):
+        original = self.fake.telegram_api
+        self.fake.member["can_post_messages"] = False
+        with patch.object(self.fake, "telegram_api", side_effect=lambda method, payload: {"id": -2002, "title": "Existing", "type": "channel"} if method == "getChat" else original(method, payload)):
+            self.send("/target_register -2002")
+        self.assertEqual(len(self.fake.get_store()["destinations"]), 1)
+
     def test_bulk_off_is_immediate_and_bulk_on_requires_confirmation_and_permissions(self):
         self.send("/targets_off", actor=9)
         self.assertFalse(self.fake.get_store()["destinations"][0]["enabled"])
