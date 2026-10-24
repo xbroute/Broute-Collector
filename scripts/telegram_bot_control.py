@@ -39,9 +39,10 @@ ACTIVE_RUN_STATUSES = {"queued", "in_progress", "pending", "requested", "waiting
 
 
 class RemoteHTTPError(RuntimeError):
-    def __init__(self, status_code: int, hostname: str):
+    def __init__(self, status_code: int, hostname: str, retry_after: int = 0):
         self.status_code = status_code
         self.hostname = hostname
+        self.retry_after = retry_after
         super().__init__(f"HTTP {status_code} from {hostname}")
 
 
@@ -80,7 +81,13 @@ def _json_request(
             return 404, {}
         # Telegram puts the bot token in the URL path. Never log that URL or
         # response bodies which may echo private command/source data.
-        raise RemoteHTTPError(exc.code, str(urlsplit(url).hostname)) from None
+        retry_after = 0
+        if exc.code == 429:
+            try:
+                retry_after = max(1, min(86400, int(json.loads(exc.read(65536))["parameters"]["retry_after"])))
+            except (ValueError, TypeError, KeyError):
+                retry_after = 30
+        raise RemoteHTTPError(exc.code, str(urlsplit(url).hostname), retry_after) from None
     except (URLError, TimeoutError) as exc:
         raise RuntimeError(f"network error from {urlsplit(url).hostname} ({type(exc).__name__})") from None
 
