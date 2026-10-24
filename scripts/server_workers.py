@@ -27,11 +27,13 @@ def bind_bot_identity(state):
 
 
 def run_bot(state, stop, once=False):
+    if state.get("activation_required"):
+        raise StateError("reconcile pending Telegram updates with the activate command first")
     bind_bot_identity(state)
     webhook = control.telegram_api("getWebhookInfo")
     if not isinstance(webhook, dict) or webhook.get("url"):
         raise StateError("an existing webhook must be removed before starting polling")
-    with state.lease("bot"), Bindings(state) as bindings:
+    with state.lease("bot"), Bindings(state, stop=stop) as bindings:
         state.recover_replies()
         control.register_commands()
         backoff = 1
@@ -70,6 +72,8 @@ def run_bot(state, stop, once=False):
 
 
 def run_publisher(state, stop, once=False):
+    if state.get("activation_required"):
+        raise StateError("activate the runtime before publishing")
     bind_bot_identity(state)
     with state.lease("publisher"), Bindings(state, stop=stop) as bindings:
         publisher.RUN_BUDGET_SECONDS = 30
@@ -140,6 +144,8 @@ def collect_generation(state, data_dir: Path, source_repo: Path | None = None):
         managed.managed_sources = lambda: [dict(row) for row in source_snapshot]
         os.chdir(generation)
         managed.main()
+        from generate_online_subscription import write_online_subscription
+        write_online_subscription()
         servers = json.loads(Path("data/servers.json").read_text())
         status = json.loads(Path("data/status.json").read_text())
         state.guard()

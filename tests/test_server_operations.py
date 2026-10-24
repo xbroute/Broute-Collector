@@ -32,8 +32,20 @@ class ArchiveIntegrationTests(unittest.TestCase):
             self.assertEqual(self.db.get("offset")["last_update_id"], 321)
             self.assertEqual(self.db.get("publisher")["destinations"]["-1001"]["sent"], ["a"])
             self.assertIsNone(self.db.next_reply())
+            self.assertEqual(self.db.get("activation_required")["reason"], "backup restore")
             with self.assertRaises(state_tests.StateError):
                 restore_archive(self.db, archive)
+
+    def test_activation_discard_is_explicit_and_does_not_turn_publishing_on(self):
+        from server_operations import activate
+        from unittest.mock import patch
+        import telegram_bot_control as control
+        with patch.object(control, "telegram_api", return_value=[{"update_id": 999}]) as request:
+            activate(self.db, "discard")
+        self.assertEqual(request.call_args.args[1]["offset"], -1)
+        self.assertEqual(self.db.get("offset"), {"last_update_id": 999})
+        self.assertIsNone(self.db.get("activation_required"))
+        self.assertFalse(self.db.get("control")["enabled"])
 
     def test_corrupt_backup_and_restore_while_a_worker_runs_are_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

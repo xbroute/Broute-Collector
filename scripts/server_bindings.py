@@ -106,6 +106,8 @@ class Bindings:
 
     def flush_replies(self, limit=20):
         for _ in range(limit):
+            if self.stop is not None and self.stop.is_set():
+                return
             if self.cooldown_remaining() > 0:
                 return
             reply = self.state.next_reply()
@@ -113,6 +115,9 @@ class Bindings:
                 return
             reply_id, request = reply
             self.state.guard()
+            if self.stop is not None and self.stop.is_set():
+                self.state.finish_reply(reply_id, "pending")
+                return
             try:
                 _, response = self.original_request(f"https://api.telegram.org/bot{control.BOT_TOKEN}/{request['method']}",
                     method="POST", headers=request["headers"], payload=request["payload"],

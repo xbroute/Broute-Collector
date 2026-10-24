@@ -86,6 +86,8 @@ jobs:
           docker compose --profile runtime up -d web
           curl --fail --retry 10 --retry-delay 1 --retry-connrefused http://127.0.0.1:8080/ -o /tmp/site.html
           grep -q 'Broute' /tmp/site.html
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/runtime/current/data/sources.json)" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/data/sources.json)" = 404
       - name: Clean isolated database
         if: always()
         run: docker compose --profile runtime down -v

@@ -94,3 +94,44 @@ class RuntimeIntegrationTests(unittest.TestCase):
                 bindings.process_update(self.update("/publisher_off", 2))
         self.assertEqual(self.db.get("offset")["last_update_id"], 2)
         self.assertFalse(self.db.get("control")["enabled"])
+
+    def test_shutdown_does_not_claim_or_send_a_pending_reply(self):
+        import threading
+        self.db.enqueue_reply({"method": "sendMessage", "payload": {}, "headers": None, "body": None})
+        stop = threading.Event()
+        stop.set()
+        with Bindings(self.db, stop=stop) as bindings, patch.object(bindings, "original_request") as request:
+            bindings.flush_replies()
+            request.assert_not_called()
+        self.assertIsNotNone(self.db.next_reply())
+
+    def test_send_intent_commits_before_http_and_crash_is_quarantined_on_restart(self):
+        import telegram_destinations
+        import test_telegram_delivery_journal as journal
+        from contextlib import ExitStack
+        self.db.put("control", {"enabled": True})
+        self.db.put("collector_snapshot", {"at": time.time(), "servers": [journal.server()]})
+        self.db.put("destinations", telegram_destinations.encrypt_store({"manager_user_ids": [], "destinations": [journal.destination()]}))
+        original_put = self.db.put
+        def fail_confirmed_write(name, value):
+            if name == "publisher" and value["destinations"].get("-1001", {}).get("sent"):
+                raise RuntimeError("power loss after HTTP accepted")
+            return original_put(name, value)
+        def accepted(*_):
+            other = state_tests.PostgresState(self.dsn, self.key, self.namespace)
+            pending = other.get("publisher")["destinations"]["-1001"]["pending_delivery"]
+            self.assertEqual(pending["server_id"], "a")
+            return {"ok": True, "result": {"message_id": 1}}
+        with self.db.lease("publisher"), Bindings(self.db), ExitStack() as stack:
+            stack.enter_context(patch.object(publisher, "RUN_BUDGET_SECONDS", 10))
+            stack.enter_context(patch.object(publisher, "RUN_STOP_RESERVE_SECONDS", 0))
+            stack.enter_context(patch.object(publisher.base, "live_validate", side_effect=lambda row: row))
+            request = stack.enter_context(patch.object(publisher.base, "_telegram_request_once", side_effect=accepted))
+            with patch.object(self.db, "put", side_effect=fail_confirmed_write):
+                self.assertEqual(publisher.main(), 1)
+            request.assert_called_once()
+            self.assertIsNotNone(self.db.get("publisher")["destinations"]["-1001"]["pending_delivery"])
+            request.reset_mock()
+            self.assertEqual(publisher.main(), 0)
+            request.assert_not_called()
+        self.assertIn("a", self.db.get("publisher")["destinations"]["-1001"]["uncertain_deliveries"])

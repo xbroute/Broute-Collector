@@ -10,13 +10,16 @@ import threading
 from pathlib import Path
 
 from server_state import PostgresState
-from server_operations import export_archive, health, import_git_state, restore_archive, run_backups
+from server_operations import activate, export_archive, health, import_git_state, restore_archive, run_backups
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("init")
+    activation = commands.add_parser("activate")
+    activation.add_argument("--pending-updates", choices=("keep", "discard"), required=True,
+                            help="keep replays saved pending commands; discard explicitly forgets the Telegram backlog")
     run = commands.add_parser("run")
     run.add_argument("role", choices=("bot", "publisher", "collector", "backup"))
     run.add_argument("--once", action="store_true")
@@ -35,7 +38,10 @@ def main(argv=None):
         state = PostgresState.from_env()
         state.initialize()
         if args.command == "init":
-            print("Database initialized; publishing defaults to OFF.")
+            print("Database initialized; publisher OFF; explicit activation required before polling.")
+        elif args.command == "activate":
+            activate(state, args.pending_updates)
+            print("Runtime activated; publisher remains OFF.")
         elif args.command == "import-git":
             import_git_state(state, args.repo.resolve(), args.bot_state.resolve(), args.publisher_state.resolve())
             print("State imported transactionally; publisher is OFF.")

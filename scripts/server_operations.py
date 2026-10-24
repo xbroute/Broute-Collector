@@ -27,7 +27,7 @@ def offline(state):
 
 
 def require_empty(state):
-    rows = state._conn.execute("SELECT name FROM broute_documents WHERE namespace=%s AND name <> 'encryption_check'", (state.namespace,)).fetchall()
+    rows = state._conn.execute("SELECT name FROM broute_documents WHERE namespace=%s AND name NOT IN ('encryption_check','activation_required')", (state.namespace,)).fetchall()
     replies = state._conn.execute("SELECT 1 FROM broute_replies WHERE namespace=%s LIMIT 1", (state.namespace,)).fetchone()
     if rows or replies:
         raise StateError("import/restore requires an empty runtime namespace; export the current database first")
@@ -58,6 +58,7 @@ def import_git_state(state, repo: Path, bot_state: Path, publisher_file: Path):
         for name, value in values.items():
             state.put(name, value)
         state.put("control", {"enabled": False})
+        state.put("activation_required", {"reason": "Git migration", "at": time.time()})
 
 
 def export_archive(state, destination: Path):
@@ -101,12 +102,43 @@ def restore_archive(state, source: Path):
         for name, value in archive["documents"].items():
             state.put(name, value)
         state.put("control", {"enabled": False})
+        # Old prompts/approvals and destination ON flags are not fresh consent.
+        if "destinations" in archive["documents"]:
+            from telegram_destinations import decrypt_store, encrypt_store
+            from telegram_admin_policy import administration
+            destinations = decrypt_store(archive["documents"]["destinations"])
+            destinations["administration"] = administration(destinations)
+            destinations["administration"]["sessions"] = {}
+            destinations["administration"]["confirmations"] = {}
+            for destination in destinations["destinations"]:
+                destination["enabled"] = False
+            state.put("destinations", encrypt_store(destinations))
+        state.put("activation_required", {"reason": "backup restore", "at": time.time()})
         for reply in archive["replies"]:
             # An older backup cannot prove whether a pending reply was sent
             # later. Restoring never replays these external side effects.
             status = reply["status"] if reply["status"] in {"sent", "failed"} else "uncertain"
             state._conn.execute("INSERT INTO broute_replies(namespace,id,payload,status) VALUES (%s,%s,%s,%s)",
                                 (state.namespace, uuid.UUID(reply["id"]), state.encode(reply["value"], "reply"), status))
+
+
+def activate(state, pending_updates):
+    import telegram_bot_control as control
+    with offline(state), state.transaction():
+        if pending_updates == "discard":
+            # Explicit operator choice. A negative offset forgets older updates;
+            # no update payload or private command content is logged.
+            batch = control.telegram_api("getUpdates", {"offset": -1, "limit": 1, "timeout": 0})
+            if not isinstance(batch, list):
+                raise StateError("invalid Telegram update batch")
+            offset = state.get("offset", {"last_update_id": 0})["last_update_id"]
+            for update in batch:
+                if not isinstance(update, dict) or not isinstance(update.get("update_id"), int):
+                    raise StateError("invalid Telegram update identity")
+                offset = max(offset, update["update_id"])
+            state.put("offset", {"last_update_id": offset})
+        state.put("control", {"enabled": False})
+        state.put("activation_required", None)
 
 
 def health(state, role):

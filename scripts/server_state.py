@@ -68,6 +68,7 @@ class PostgresState:
                 if self._conn.execute("SELECT 1 FROM broute_documents WHERE namespace=%s LIMIT 1", (self.namespace,)).fetchone():
                     raise StateError("database encryption sentinel missing")
                 self.put("encryption_check", {"version": 1})
+                self.put("activation_required", {"reason": "new database"})
             elif sentinel != {"version": 1}:
                 raise StateError("invalid database encryption sentinel")
 
