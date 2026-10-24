@@ -115,7 +115,7 @@ jobs:
     # such a run consume the production bot's update queue.
     # Pull requests are tested by read-only ci.yml. Production bot credentials
     # and write-capable jobs must never execute pull-request code.
-    if: github.event_name != 'pull_request' && (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch == 'main')
+    if: vars.BROUTE_RUNTIME != 'server' && github.event_name != 'pull_request' && (github.event_name != 'workflow_run' || github.event.workflow_run.head_branch == 'main')
     runs-on: ubuntu-latest
     timeout-minutes: 5
 

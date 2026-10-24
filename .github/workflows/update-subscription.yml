@@ -23,6 +23,7 @@ concurrency:
 
 jobs:
   update:
+    if: vars.BROUTE_RUNTIME != 'server'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

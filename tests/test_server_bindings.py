@@ -13,8 +13,18 @@ if state_tests.PostgresState:
 
 @unittest.skipUnless(state_tests.PostgresState and os.environ.get("TEST_DATABASE_URL"), "requires a real isolated PostgreSQL service")
 class RuntimeIntegrationTests(unittest.TestCase):
-    setUp = state_tests.PostgresIntegrationTests.setUp
     tearDown = state_tests.PostgresIntegrationTests.tearDown
+
+    def setUp(self):
+        state_tests.PostgresIntegrationTests.setUp(self)
+        self.addCleanup(patch.stopall)
+        patch.dict(os.environ, {"TELEGRAM_BOT_TOKEN": "isolated-test-token"}).start()
+        patch.object(control, "BOT_TOKEN", "isolated-test-token").start()
+        def request(url, **kwargs):
+            if url.endswith("/getMe"):
+                return 200, {"ok": True, "result": {"id": 999}}
+            raise AssertionError("unexpected external request in integration test")
+        patch.object(control, "_json_request", side_effect=request).start()
 
     def update(self, text="/publisher_off", update_id=1, actor=123):
         return {"update_id": update_id, "message": {"text": text, "from": {"id": actor}, "chat": {"id": actor, "type": "private"}}}
