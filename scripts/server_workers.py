@@ -37,7 +37,10 @@ def run_bot(state, stop, once=False):
         raise StateError("an existing webhook must be removed before starting polling")
     with state.lease("bot"), Bindings(state, stop=stop) as bindings:
         state.recover_replies()
-        control.register_commands()
+        try:
+            control.register_commands()
+        except Exception as exc:
+            print(f"[server] menu registration deferred ({type(exc).__name__})", flush=True)
         backoff = 1
         while not stop.is_set():
             state.pulse("bot")
@@ -74,6 +77,8 @@ def run_bot(state, stop, once=False):
 
 
 def run_publisher(state, stop, once=False):
+    if os.environ.get("BROUTE_VALIDATION_MODE", "tcp") not in {"tcp", "proxy"}:
+        raise StateError("BROUTE_VALIDATION_MODE must be tcp or proxy")
     if state.get("activation_required"):
         raise StateError("activate the runtime before publishing")
     bind_bot_identity(state)
@@ -154,23 +159,25 @@ def collect_generation(state, data_dir: Path, source_repo: Path | None = None):
         mode = os.environ.get("BROUTE_VALIDATION_MODE", "tcp")
         if mode not in {"tcp", "proxy"}:
             raise StateError("BROUTE_VALIDATION_MODE must be tcp or proxy")
-        if mode == "proxy":
-            import generator
-            from proxy_probe import validate_with_proxy
-            original_validate = generator.run_validation
-            def validate(records, previous):
-                checked, stats = original_validate(records, previous)
-                for item in checked:
-                    if item.get("validation_method") != "proxy_https" or not 0 <= time.time() - item.get("probe_at", 0) <= 900:
-                        item.update(status="unknown", latency=None)
-                return checked, stats
-            with ExitStack() as stack:
+        with ExitStack() as stack:
+            if os.environ.get("BROUTE_PIN_ALL_SOURCES", "1") == "1":
+                import collector
+                from server_source_fetch import fetch_public_text
+                stack.enter_context(patch.object(collector, "fetch_url", fetch_public_text))
+            if mode == "proxy":
+                import generator
+                from proxy_probe import validate_with_proxy
+                original_validate = generator.run_validation
+                def validate(records, previous):
+                    checked, stats = original_validate(records, previous)
+                    for item in checked:
+                        if item.get("validation_method") != "proxy_https" or not 0 <= time.time() - item.get("probe_at", 0) <= 900:
+                            item.update(status="unknown", latency=None)
+                    return checked, stats
                 stack.enter_context(patch.object(generator, "validate_server", validate_with_proxy))
                 stack.enter_context(patch.object(generator, "run_validation", validate))
                 stack.enter_context(patch.object(generator, "VALIDATION_WORKERS", 2))
                 stack.enter_context(patch.object(generator, "MAX_VALIDATIONS_PER_RUN", min(40, generator.MAX_VALIDATIONS_PER_RUN)))
-                managed.main()
-        else:
             managed.main()
         from generate_online_subscription import write_online_subscription
         write_online_subscription()

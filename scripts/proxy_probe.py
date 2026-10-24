@@ -123,7 +123,7 @@ def resolve_public(host, port, timeout, *, allow_private=False):
         addresses = json.loads(result.stdout)
     public = [address for address in addresses if allow_private or
               (ipaddress.ip_address(address).is_global and not ipaddress.ip_address(address).is_multicast)]
-    if not public:
+    if not public or len(public) != len(addresses):
         raise ValueError("endpoint has no permitted public address")
     with _dns_lock:
         if len(_dns_cache) >= 1024:
