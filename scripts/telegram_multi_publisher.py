@@ -179,6 +179,11 @@ def load_state() -> Dict[str, Any]:
         raw = {}
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError("publisher state is unreadable; refusing to reset sent history") from exc
+    return normalize_state(raw)
+
+
+def normalize_state(raw: Any) -> Dict[str, Any]:
+    """Validate a file or database snapshot without resetting delivery history."""
     if not isinstance(raw, dict):
         raise RuntimeError("publisher state must be a JSON object")
     if raw.get("version", STATE_VERSION) != STATE_VERSION:
