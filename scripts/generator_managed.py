@@ -91,17 +91,25 @@ def main() -> int:
     # generator.py imports `collect` by value (`from collector import collect`).
     # Patch collector before importing generator so the existing generator uses
     # our combined collector without invasive edits to its core pipeline.
+    original_collector_collect = collector.collect
     collector.collect = collect_with_managed
 
     import generator
 
     original_count_active_sources = generator.count_active_sources
+    original_generator_collect = generator.collect
 
     def count_active_sources_with_managed() -> int:
         return original_count_active_sources() + len(managed_sources())
 
     generator.count_active_sources = count_active_sources_with_managed
-    generator.main()
+    generator.collect = collect_with_managed
+    try:
+        generator.main()
+    finally:
+        generator.collect = original_generator_collect
+        generator.count_active_sources = original_count_active_sources
+        collector.collect = original_collector_collect
     return 0
 
 

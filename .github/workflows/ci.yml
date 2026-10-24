@@ -3,10 +3,10 @@ name: Collector Regression Tests
 on:
   pull_request:
     branches: [main]
-    paths: ["scripts/**", "tests/**", "assets/**", "index.html", "requirements.txt", "package.json", "package-lock.json", ".github/workflows/**"]
+    paths: ["scripts/**", "tests/**", "assets/**", "index.html", "requirements*.txt", "Dockerfile", "compose.yml", "deploy/**", "package.json", "package-lock.json", ".github/workflows/**"]
   push:
     branches: [main, fix/collector-reliability-audit]
-    paths: ["scripts/**", "tests/**", "assets/**", "index.html", "requirements.txt", "package.json", "package-lock.json", ".github/workflows/**"]
+    paths: ["scripts/**", "tests/**", "assets/**", "index.html", "requirements*.txt", "Dockerfile", "compose.yml", "deploy/**", "package.json", "package-lock.json", ".github/workflows/**"]
   workflow_dispatch: {}
 
 permissions:
@@ -20,6 +20,19 @@ jobs:
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: broute_test
+          POSTGRES_PASSWORD: isolated_ci_only
+          POSTGRES_DB: broute_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U broute_test -d broute_test"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      TEST_DATABASE_URL: postgresql://broute_test:isolated_ci_only@127.0.0.1:5432/broute_test
     steps:
       - uses: actions/checkout@v4
         with:
@@ -32,7 +45,7 @@ jobs:
         with:
           node-version: "22"
       - name: Install collector dependency
-        run: python -m pip install -r requirements.txt
+        run: python -m pip install -r requirements-server.lock
       - name: Compile all scripts and run every regression test
         run: |
           python -m compileall -q scripts tests
@@ -47,3 +60,42 @@ jobs:
           npx playwright install --with-deps chromium
       - name: Test desktop and mobile interactions
         run: npm run test:browser
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build and verify isolated server containers without Telegram access
+        shell: bash
+        run: |
+          python - <<'PY'
+          import base64, pathlib, secrets
+          values = pathlib.Path('deploy/server.env.example').read_text()
+          values = values.replace('replace-with-a-random-database-admin-password', secrets.token_urlsafe(32))
+          values = values.replace('replace-with-a-different-random-runtime-password', secrets.token_urlsafe(32))
+          values = values.replace('replace-with-generated-fernet-key', base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())
+          pathlib.Path('.env').write_text(values)
+          PY
+          docker compose --profile runtime config --quiet
+          docker compose --profile runtime build init web
+          docker run --rm --entrypoint python -e PYTHONPATH=/app/scripts -v "$PWD/tests:/tests:ro" broute-runtime:local -m unittest discover -s /tests -p test_proxy_probe.py -v
+          docker compose --profile runtime run --rm init
+          docker compose --profile runtime run --rm init export /app/backups/ci.broute
+          docker compose exec -T db psql -U postgres -d broute -Atc "SELECT NOT rolsuper FROM pg_roles WHERE rolname='broute'" | grep -qx t
+          docker compose --profile runtime run --rm --no-deps --entrypoint python collector -c "from pathlib import Path; p=Path('/app/runtime-data/generation-fixture/data'); p.mkdir(parents=True, exist_ok=True); (p/'sources.json').write_text('private-test-input'); (p/'manual.txt').write_text('private-test-input'); (p/'sub.txt').write_text('public-test-feed'); Path('/app/runtime-data/current').symlink_to('generation-fixture')"
+          docker compose --profile runtime up -d web
+          curl --fail --retry 10 --retry-delay 1 --retry-all-errors http://127.0.0.1:8080/ -o /tmp/site.html
+          cmp index.html /tmp/site.html
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/runtime/current/data/sources.json)" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/data/sources.json)" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/data/manual.txt)" = 404
+          test "$(curl --path-as-is -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/assets/../runtime/current/data/sources.json)" = 404
+          test "$(curl -fs http://127.0.0.1:8080/data/sub.txt)" = public-test-feed
+      - name: Show container diagnostics on failure
+        if: failure()
+        run: docker compose --profile runtime logs --tail 60 web
+      - name: Clean isolated database
+        if: always()
+        run: docker compose --profile runtime down -v

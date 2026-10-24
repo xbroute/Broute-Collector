@@ -5,6 +5,7 @@
     "test:browser": "node tests/browser_smoke.cjs"
   },
   "devDependencies": {
+    "jsqr": "1.4.0",
     "playwright": "1.62.1"
   }
 }

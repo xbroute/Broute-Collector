@@ -170,6 +170,13 @@ def resolve_public_addresses(url: str) -> Tuple[str, List[str]]:
     host = str(parts.hostname or "")
     port = parts.port or (443 if parts.scheme == "https" else 80)
 
+    if os.environ.get("BROUTE_BOUNDED_DNS") == "1":
+        from proxy_probe import resolve_public
+        try:
+            return normalized, resolve_public(host, port, min(2, FETCH_TIMEOUT_SECONDS))
+        except Exception:
+            raise SourceValidationError("DNS منبع در مهلت مجاز پاسخ عمومی معتبر نداد") from None
+
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
     except socket.gaierror as exc:
@@ -261,7 +268,10 @@ def _host_header(parts) -> str:
     return hostname
 
 
-def _fetch_one_hop(url: str) -> Tuple[int, Dict[str, str], bytes]:
+def _fetch_one_hop(url: str, *, timeout=None, max_size=None, user_agent=None) -> Tuple[int, Dict[str, str], bytes]:
+    timeout = FETCH_TIMEOUT_SECONDS if timeout is None else timeout
+    max_size = MAX_SOURCE_BYTES if max_size is None else min(max_size, MAX_SOURCE_BYTES)
+    user_agent = USER_AGENT if user_agent is None else user_agent
     normalized, addresses = resolve_public_addresses(url)
     parts = urlsplit(normalized)
     host = str(parts.hostname or "")
@@ -271,9 +281,9 @@ def _fetch_one_hop(url: str) -> Tuple[int, Dict[str, str], bytes]:
     for pinned_ip in addresses:
         connection: http.client.HTTPConnection
         if parts.scheme == "https":
-            connection = _PinnedHTTPSConnection(host, pinned_ip, port, FETCH_TIMEOUT_SECONDS)
+            connection = _PinnedHTTPSConnection(host, pinned_ip, port, timeout)
         else:
-            connection = _PinnedHTTPConnection(host, pinned_ip, port, FETCH_TIMEOUT_SECONDS)
+            connection = _PinnedHTTPConnection(host, pinned_ip, port, timeout)
 
         try:
             connection.request(
@@ -281,7 +291,7 @@ def _fetch_one_hop(url: str) -> Tuple[int, Dict[str, str], bytes]:
                 _request_target(parts),
                 headers={
                     "Host": _host_header(parts),
-                    "User-Agent": USER_AGENT,
+                    "User-Agent": user_agent,
                     "Accept": "text/plain, application/octet-stream, */*;q=0.5",
                     "Accept-Encoding": "identity",
                     "Connection": "close",
@@ -296,7 +306,7 @@ def _fetch_one_hop(url: str) -> Tuple[int, Dict[str, str], bytes]:
                 response.close()
                 return status, headers, b""
 
-            data = response.read(MAX_SOURCE_BYTES + 1)
+            data = response.read(max_size + 1)
             response.close()
             return status, headers, data
         except (OSError, ssl.SSLError, http.client.HTTPException, TimeoutError) as exc:

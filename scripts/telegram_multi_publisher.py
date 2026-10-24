@@ -179,6 +179,11 @@ def load_state() -> Dict[str, Any]:
         raw = {}
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError("publisher state is unreadable; refusing to reset sent history") from exc
+    return normalize_state(raw)
+
+
+def normalize_state(raw: Any) -> Dict[str, Any]:
+    """Validate a file or database snapshot without resetting delivery history."""
     if not isinstance(raw, dict):
         raise RuntimeError("publisher state must be a JSON object")
     if raw.get("version", STATE_VERSION) != STATE_VERSION:
@@ -684,6 +689,11 @@ def _has_work(
     return False
 
 
+def wait_for_next_slot(seconds: float) -> None:
+    """Actions sleeps normally; resident workers can supply an interruptible wait."""
+    time.sleep(seconds)
+
+
 def main() -> int:
     token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
     if not token:
@@ -772,7 +782,7 @@ def main() -> int:
                 )
                 if sleep_for <= 0:
                     break
-                time.sleep(sleep_for)
+                wait_for_next_slot(sleep_for)
                 continue
 
             chat_key = str(destination["chat_id"])

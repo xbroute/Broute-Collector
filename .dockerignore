@@ -1,0 +1,11 @@
+.git
+.env
+.env.*
+.venv
+node_modules
+tests
+runtime-data
+runtime-backups
+__pycache__
+*.broute
+*.pem

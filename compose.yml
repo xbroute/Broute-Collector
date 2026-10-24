@@ -1,0 +1,123 @@
+name: broute
+
+x-runtime: &runtime
+  build: .
+  image: broute-runtime:local
+  profiles: [runtime]
+  env_file: .env
+  environment:
+    PGHOST: db
+    PGPORT: "5432"
+    PGUSER: broute
+    PGDATABASE: broute
+    PGPASSWORD: ${BROUTE_DB_PASSWORD:?Set BROUTE_DB_PASSWORD in .env}
+    BROUTE_DATA_DIR: /app/runtime-data
+    BROUTE_BACKUP_DIR: /app/backups
+  depends_on:
+    db:
+      condition: service_healthy
+    init:
+      condition: service_completed_successfully
+  restart: unless-stopped
+  read_only: true
+  tmpfs: ["/tmp:size=128m,mode=1777"]
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  pids_limit: 128
+  mem_limit: 512m
+  stop_grace_period: 45s
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: broute
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      BROUTE_DB_PASSWORD: ${BROUTE_DB_PASSWORD:?Set BROUTE_DB_PASSWORD in .env}
+    volumes:
+      - database:/var/lib/postgresql/data
+      - ./deploy/init-runtime-db.sh:/docker-entrypoint-initdb.d/10-runtime.sh:ro
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d broute"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+  init:
+    <<: *runtime
+    command: [init]
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes: [backups:/app/backups]
+  bot:
+    <<: *runtime
+    command: [run, bot]
+    healthcheck:
+      test: [CMD, python, scripts/server_runtime.py, health, bot]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+  publisher:
+    <<: *runtime
+    command: [run, publisher]
+    healthcheck:
+      test: [CMD, python, scripts/server_runtime.py, health, publisher]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+  collector:
+    <<: *runtime
+    command: [run, collector]
+    mem_limit: 1g
+    volumes: [public-data:/app/runtime-data]
+    healthcheck:
+      test: [CMD, python, scripts/server_runtime.py, health, collector]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 180s
+  backup:
+    <<: *runtime
+    command: [run, backup]
+    volumes: [backups:/app/backups]
+    healthcheck:
+      test: [CMD, python, scripts/server_runtime.py, health, backup]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    image: broute-web:local
+    profiles: [runtime]
+    user: "1000:1000"
+    ports: ["127.0.0.1:8080:8080"]
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./index.html:/srv/index.html:ro
+      - ./assets:/srv/assets:ro
+      - public-data:/srv/runtime:ro
+    restart: unless-stopped
+    read_only: true
+    tmpfs: ["/tmp:size=16m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging:
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+
+volumes:
+  database:
+  public-data:
+  backups:

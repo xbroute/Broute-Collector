@@ -1,0 +1,27 @@
+{
+	admin off
+	auto_https off
+}
+:8080 {
+	root * /srv
+	header X-Content-Type-Options nosniff
+	header Referrer-Policy strict-origin-when-cross-origin
+	@generated path /data/servers.json /data/status.json /data/all.txt /data/secure.txt /data/sub.txt /data/sub-base64.txt /data/online-sub.txt /data/online-sub-base64.txt /data/vless.txt /data/vmess.txt /data/trojan.txt /data/shadowsocks.txt /data/hysteria2.txt
+	handle @generated {
+		uri strip_prefix /data
+		root * /srv/runtime/current/data
+		header Cache-Control "no-cache"
+		file_server
+	}
+	handle_path /assets/* {
+		root * /srv/assets
+		file_server
+	}
+	@home path / /index.html
+	handle @home {
+		file_server
+	}
+	handle {
+		respond "Not found" 404
+	}
+}

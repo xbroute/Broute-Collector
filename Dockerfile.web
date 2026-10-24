@@ -1,0 +1,6 @@
+FROM caddy:2-alpine
+# The upstream binary carries cap_net_bind_service. Remove that file capability
+# so it can execute with cap_drop: ALL; this server binds only port 8080.
+RUN setcap -r /usr/bin/caddy
+ENV XDG_CONFIG_HOME=/tmp/caddy-config XDG_DATA_HOME=/tmp/caddy-data
+USER 1000:1000

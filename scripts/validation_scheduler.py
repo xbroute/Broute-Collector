@@ -33,6 +33,12 @@ DYNAMIC_FIELDS = (
     "country",
     "country_name",
     "should_remove",
+    "resolved_ip",
+    "validation_method",
+    "probe_status",
+    "probe_at",
+    "proxy_tls_verification",
+    "probe_target_tls_verified",
 )
 
 
