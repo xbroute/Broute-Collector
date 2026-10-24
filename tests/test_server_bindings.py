@@ -105,6 +105,15 @@ class RuntimeIntegrationTests(unittest.TestCase):
             request.assert_not_called()
         self.assertIsNotNone(self.db.next_reply())
 
+    def test_fifty_sequential_admin_commands_keep_offsets_audit_and_replies_consistent(self):
+        self.db.put("control", {"enabled": False})
+        with patch.dict(os.environ, {"TELEGRAM_OWNER_USER_IDS": "123"}), self.db.lease("bot"), Bindings(self.db) as bindings:
+            for update_id in range(1, 51):
+                bindings.process_update(self.update("/publisher_on" if update_id % 2 else "/publisher_off", update_id))
+        self.assertEqual(self.db.get("offset")["last_update_id"], 50)
+        self.assertFalse(self.db.get("control")["enabled"])
+        self.assertEqual(self.db.reply_metrics().get("pending"), 50)
+
     def test_send_intent_commits_before_http_and_crash_is_quarantined_on_restart(self):
         import telegram_destinations
         import test_telegram_delivery_journal as journal

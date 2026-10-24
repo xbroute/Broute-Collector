@@ -13,8 +13,8 @@
 		header Cache-Control "no-cache"
 		file_server
 	}
-	@assets path /assets/*
-	handle @assets {
+	handle_path /assets/* {
+		root * /srv/assets
 		file_server
 	}
 	@home path / /index.html
