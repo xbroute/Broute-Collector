@@ -12,6 +12,10 @@ import json
 import ipaddress
 import socket
 import time
+import os
+import subprocess
+import threading
+from collections import deque
 import urllib.request
 import urllib.error
 from typing import Dict, Optional
@@ -31,8 +35,12 @@ def resolve_and_check_tcp(address: str, port: int) -> Dict:
         if not 0 < int(port) <= 65535:
             return result
         start = time.monotonic()
-        infos = socket.getaddrinfo(address, port, type=socket.SOCK_STREAM)
-        addresses = list(dict.fromkeys(str(info[4][0]) for info in infos if info[4]))
+        if os.environ.get("BROUTE_BOUNDED_DNS") == "1":
+            from proxy_probe import resolve_public
+            addresses = resolve_public(address, port, min(2, CHECK_TIMEOUT_SECONDS))
+        else:
+            infos = socket.getaddrinfo(address, port, type=socket.SOCK_STREAM)
+            addresses = list(dict.fromkeys(str(info[4][0]) for info in infos if info[4]))
         # A public-looking hostname can resolve to localhost/private metadata.
         # Validate the actual destination and pin each connection to that IP.
         public_ips = [ip for ip in addresses if ipaddress.ip_address(ip).is_global
@@ -52,36 +60,64 @@ def resolve_and_check_tcp(address: str, port: int) -> Dict:
                     break
             except OSError:
                 continue
-    except (socket.gaierror, socket.timeout, OSError, ValueError, TypeError):
+    except (socket.gaierror, socket.timeout, OSError, ValueError, TypeError, subprocess.SubprocessError):
         pass
     return result
 
 
+_geo_cache = {}
+_geo_requests = deque()
+_geo_inflight = set()
+_geo_lock = threading.Lock()
+
+
 def lookup_country(ip: str) -> Dict[str, str]:
     """تشخیص تقریبی کشور. در صورت هرگونه خطا مقدار Unknown برگردانده می‌شود."""
+    unknown = {"country": "XX", "country_name": "Unknown"}
+    now = time.monotonic()
+    if os.environ.get("BROUTE_GEOIP_ENABLED", "1") == "0":
+        return unknown
+    with _geo_lock:
+        cached = _geo_cache.get(ip)
+        if cached and cached[0] > now:
+            return dict(cached[1])
+        while _geo_requests and _geo_requests[0] <= now - 60:
+            _geo_requests.popleft()
+        if ip in _geo_inflight or len(_geo_requests) >= 30:
+            return unknown
+        _geo_requests.append(now)
+        _geo_inflight.add(ip)
+    result = unknown
     try:
         req = urllib.request.Request(GEOIP_API_TEMPLATE.format(ip=ip))
         with urllib.request.urlopen(req, timeout=CHECK_TIMEOUT_SECONDS) as response:
-            data = json.loads(response.read().decode("utf-8"))
+            raw = response.read(65537)
+            data = json.loads(raw.decode("utf-8")) if len(raw) <= 65536 else {}
             if isinstance(data, dict) and data.get("status") == "success":
-                return {
-                    "country": data.get("countryCode", "XX"),
-                    "country_name": data.get("country", "Unknown"),
-                }
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError):
+                code, name = data.get("countryCode"), data.get("country")
+                if isinstance(code, str) and len(code) == 2 and code.isascii() and code.isalpha() and isinstance(name, str):
+                    result = {"country": code.upper(), "country_name": name[:80]}
+    except (urllib.error.URLError, TimeoutError, ValueError, UnicodeError, OSError):
         pass
-    return {"country": "XX", "country_name": "Unknown"}
+    finally:
+        with _geo_lock:
+            _geo_inflight.discard(ip)
+            if len(_geo_cache) >= 4096:
+                _geo_cache.pop(next(iter(_geo_cache)))
+            _geo_cache[ip] = now + (300 if result["country"] == "XX" else 86400), dict(result)
+    return result
 
 
-def validate_server(server: Dict, previous_state: Optional[Dict] = None) -> Dict:
+def validate_server(server: Dict, previous_state: Optional[Dict] = None, *, checker=None) -> Dict:
     """
     یک رکورد سرور (دیکشنری سازگار با servers.json) را بررسی و آمار آن را
     به‌روزرسانی می‌کند. previous_state آمار قبلی همان کانفیگ (بر اساس id) است.
     """
-    check = resolve_and_check_tcp(server["address"], server["port"])
+    check = (checker or resolve_and_check_tcp)(server["address"], server["port"])
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
     prev = previous_state or {}
+    server["resolved_ip"] = check.get("ip")
     if prev.get("last_seen"):
         server["last_seen"] = prev["last_seen"]
     success_count = prev.get("success_count", 0)
@@ -106,7 +142,8 @@ def validate_server(server: Dict, previous_state: Optional[Dict] = None) -> Dict
     server["consecutive_failures"] = consecutive_failures
     server["first_seen"] = prev.get("first_seen", now_iso)
 
-    if check["resolved"] and check["ip"] and not prev.get("country"):
+    if check["resolved"] and check["ip"] and (prev.get("country") in {None, "", "XX"} or
+            prev.get("resolved_ip") and prev["resolved_ip"] != check["ip"]):
         geo = lookup_country(check["ip"])
         server["country"] = geo["country"]
         server["country_name"] = geo["country_name"]

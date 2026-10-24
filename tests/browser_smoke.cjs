@@ -6,6 +6,7 @@ const fs = require("node:fs/promises");
 const http = require("node:http");
 const path = require("node:path");
 const { chromium } = require("playwright");
+const jsQR = require("jsqr");
 const root = path.resolve(__dirname, "..");
 const checks = [];
 function check(value, label) { assert(value, label); checks.push(label); }
@@ -82,7 +83,19 @@ async function main() {
     check((await page.evaluate(() => window.fallbackCopy)).endsWith("/data/sub.txt"), "missing clipboard API uses the fallback");
     check(await page.locator("textarea").count() === 0, "clipboard fallback cleans up its input");
     await page.click("#show-qr-btn");
+    const pixels = await page.locator("#qr-code-container canvas").evaluate(canvas => {
+      const context = canvas.getContext("2d");
+      return { width: canvas.width, height: canvas.height,
+        data: Array.from(context.getImageData(0, 0, canvas.width, canvas.height).data) };
+    });
+    const decoded = jsQR(Uint8ClampedArray.from(pixels.data), pixels.width, pixels.height);
+    check(decoded && decoded.data.endsWith("/data/sub.txt"), "offline QR image decodes to the subscription URL");
+    check(await page.evaluate(async () => { await document.fonts.ready; return document.fonts.check("16px Vazirmatn"); }), "local Persian font loads without a CDN");
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => { window.savedQRCode = window.QRCode; window.QRCode = undefined; });
+    await page.click("#show-qr-btn");
     check((await page.locator("#toast").textContent()).includes("QR Code"), "unavailable QR dependency fails gracefully");
+    await page.evaluate(() => { window.QRCode = window.savedQRCode; });
     check(await page.locator("#toast").count() === 1, "toast ID is unique");
     await page.click('[data-platform="android"]');
     check(await page.locator("#platform-apps-modal").isVisible(), "platform selection opens the apps modal");

@@ -9,7 +9,7 @@ import sys
 import threading
 from pathlib import Path
 
-from server_state import PostgresState
+from server_state import PostgresState, StateError
 from server_operations import activate, export_archive, health, import_git_state, restore_archive, run_backups
 
 
@@ -75,6 +75,9 @@ def main(argv=None):
             else:
                 run_backups(state, stop, Path(os.environ.get("BROUTE_BACKUP_DIR", "runtime-backups")).resolve(), args.once)
         return 0
+    except StateError as exc:
+        print(f"[server] {exc}", file=sys.stderr, flush=True)
+        return 1
     except Exception as exc:
         # Never print a DSN, bot token, private URL, or raw Telegram request.
         print(f"[server] operation failed ({type(exc).__name__}); verify configuration, database and worker health.", file=sys.stderr, flush=True)

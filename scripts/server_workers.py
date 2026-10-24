@@ -7,6 +7,8 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
+from contextlib import ExitStack
+from unittest.mock import patch
 
 import telegram_bot_control as control
 import telegram_multi_publisher as publisher
@@ -76,6 +78,12 @@ def run_publisher(state, stop, once=False):
         raise StateError("activate the runtime before publishing")
     bind_bot_identity(state)
     with state.lease("publisher"), Bindings(state, stop=stop) as bindings:
+        if os.environ.get("BROUTE_VALIDATION_MODE", "tcp") == "proxy":
+            from proxy_probe import validate_with_proxy
+            def live(server):
+                checked = validate_with_proxy(dict(server), server)
+                return checked if checked.get("probe_status") == "passed" else None
+            bindings.stack.enter_context(patch.object(publisher.base, "live_validate", live))
         publisher.RUN_BUDGET_SECONDS = 30
         publisher.RUN_STOP_RESERVE_SECONDS = 0
         publisher.CHECK_INTERVAL_SECONDS = 2
@@ -143,7 +151,27 @@ def collect_generation(state, data_dir: Path, source_repo: Path | None = None):
     try:
         managed.managed_sources = lambda: [dict(row) for row in source_snapshot]
         os.chdir(generation)
-        managed.main()
+        mode = os.environ.get("BROUTE_VALIDATION_MODE", "tcp")
+        if mode not in {"tcp", "proxy"}:
+            raise StateError("BROUTE_VALIDATION_MODE must be tcp or proxy")
+        if mode == "proxy":
+            import generator
+            from proxy_probe import validate_with_proxy
+            original_validate = generator.run_validation
+            def validate(records, previous):
+                checked, stats = original_validate(records, previous)
+                for item in checked:
+                    if item.get("validation_method") != "proxy_https" or not 0 <= time.time() - item.get("probe_at", 0) <= 900:
+                        item.update(status="unknown", latency=None)
+                return checked, stats
+            with ExitStack() as stack:
+                stack.enter_context(patch.object(generator, "validate_server", validate_with_proxy))
+                stack.enter_context(patch.object(generator, "run_validation", validate))
+                stack.enter_context(patch.object(generator, "VALIDATION_WORKERS", 2))
+                stack.enter_context(patch.object(generator, "MAX_VALIDATIONS_PER_RUN", min(40, generator.MAX_VALIDATIONS_PER_RUN)))
+                managed.main()
+        else:
+            managed.main()
         from generate_online_subscription import write_online_subscription
         write_online_subscription()
         servers = json.loads(Path("data/servers.json").read_text())

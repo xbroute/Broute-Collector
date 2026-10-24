@@ -1,6 +1,8 @@
+FROM ghcr.io/sagernet/sing-box:v1.14.4 AS proxy-engine
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
+COPY --from=proxy-engine /usr/local/bin/sing-box /usr/local/bin/sing-box
 COPY requirements-server.lock ./
 RUN pip install --no-cache-dir -r requirements-server.lock \
     && groupadd --gid 1000 broute \

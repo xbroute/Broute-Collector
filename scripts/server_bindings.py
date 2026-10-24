@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import os
 import time
 from contextlib import ExitStack
 from unittest.mock import patch
@@ -83,7 +84,11 @@ class Bindings:
             raise StateError("invalid collector snapshot")
         if fresh and time.time() - float(snapshot.get("at", 0)) > self.max_snapshot_age:
             raise SnapshotUnavailable("collector snapshot is missing or stale; publishing paused")
-        return copy.deepcopy(snapshot.get("servers", []))
+        servers = copy.deepcopy(snapshot.get("servers", []))
+        if fresh and os.environ.get("BROUTE_VALIDATION_MODE", "tcp") == "proxy":
+            servers = [row for row in servers if row.get("validation_method") == "proxy_https" and row.get("probe_status") == "passed"
+                       and 0 <= time.time() - row.get("probe_at", 0) <= 900]
+        return servers
 
     def active_publisher(self):
         pulse = self.state.get("heartbeat:publisher", {})
@@ -149,6 +154,18 @@ class Bindings:
         bind(control, "_json_request", self.queue_request)
         bind(sources, "_ensure_collector", self.request_collector)
         bind(admin.AdminPanel, "servers", lambda panel: self.snapshot())
+        original_health = admin.AdminPanel.health
+        def health(panel, store, chat):
+            from server_operations import health as worker_health
+            original_health(panel, store, chat)
+            lines = ["اجرای دائمی و پایگاه داده تراکنشی PostgreSQL"]
+            for role in ("bot", "publisher", "collector", "backup"):
+                status = worker_health(self.state, role)
+                lines.append(f"{'✅' if status['healthy'] else '⚠️'} {role}: {status['status']}")
+            replies = self.state.reply_metrics()
+            lines.append(f"پاسخ خصوصی در انتظار: {replies.get('pending', 0)} | نامطمئن: {replies.get('uncertain', 0)} | ردشده: {replies.get('failed', 0)}")
+            panel.say(chat, "\n".join(lines))
+        bind(admin.AdminPanel, "health", health)
         bind(publisher, "load_state", lambda: publisher.normalize_state(self.state.get("publisher", {})))
         bind(publisher, "checkpoint_state", lambda value, reason: self.state.put("publisher", publisher._aggregate_compatibility(value)))
         bind(publisher, "load_destinations_remote", lambda: normalize_store(decrypt_store(self.state.get("destinations", {}))))

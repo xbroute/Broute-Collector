@@ -157,7 +157,11 @@ class PostgresState:
     def finish_reply(self, reply_id, status):
         with self.transaction():
             self._conn.execute("UPDATE broute_replies SET status=%s WHERE namespace=%s AND id=%s", (status, self.namespace, reply_id))
-            self._conn.execute("DELETE FROM broute_replies WHERE namespace=%s AND status IN ('sent','failed') AND created_at < now() - interval '7 days'", (self.namespace,))
+            self._conn.execute("DELETE FROM broute_replies WHERE namespace=%s AND status IN ('sent','failed','uncertain') AND created_at < now() - interval '7 days'", (self.namespace,))
+
+    def reply_metrics(self):
+        with self.transaction():
+            return dict(self._conn.execute("SELECT status,count(*) FROM broute_replies WHERE namespace=%s GROUP BY status", (self.namespace,)).fetchall())
 
     def pulse(self, role, status="ready"):
         import time
